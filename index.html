@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#193c37">
+  <title>P139 新人的考驗</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <main class="page-shell">
+    <header class="site-header">
+      <div class="brand-mark" aria-hidden="true">139</div>
+      <div class="brand-copy"><p class="eyebrow">P139 · PRIVATE LEARNING SPACE</p><h1>新人的考驗</h1><p class="subtitle">用照片練習記住名字，讓新人更快認識身邊的人。</p></div>
+      <span class="version-tag">V0.1</span>
+    </header>
+
+    <section id="setupNotice" class="notice hidden" role="status"></section>
+
+    <section id="loginPanel" class="panel login-panel">
+      <div class="section-heading"><div><p class="eyebrow">MEMBER SIGN IN</p><h2>登入內部空間</h2></div><span class="lock-icon" aria-hidden="true">🔒</span></div>
+      <p class="muted">人物照片、姓名與答題紀錄僅供獲授權的團體成員使用。</p>
+      <form id="loginForm" class="form-stack">
+        <label>Email<input id="emailInput" type="email" autocomplete="username" required></label>
+        <label>密碼<span class="password-wrap"><input id="passwordInput" type="password" autocomplete="current-password" required><button id="togglePassword" class="text-button" type="button">顯示</button></span></label>
+        <button class="button primary full" type="submit">登入</button>
+      </form>
+      <p class="small-note">需要帳號或密碼協助？請前往 <a id="accountCenterLink" href="#" target="_blank" rel="noopener">P130 帳號中心</a>。</p>
+      <p id="loginError" class="error-text" aria-live="polite"></p>
+    </section>
+
+    <section id="appPanel" class="hidden">
+      <div class="workspace-bar panel">
+        <label class="org-select-label">目前團體<select id="orgSelect"></select></label>
+        <div class="user-actions"><span id="userEmail" class="muted"></span><button id="logoutButton" class="button quiet" type="button">登出</button></div>
+      </div>
+      <nav id="mainTabs" class="tabs" aria-label="主要功能">
+        <button class="tab active" data-view="practice" type="button">開始練習</button>
+        <button class="tab" data-view="priorities" type="button">我的優先級</button>
+        <button class="tab hidden" id="manageTab" data-view="manage" type="button">人物管理</button>
+        <button class="tab hidden" id="membersTab" data-view="members" type="button">成員管理</button>
+      </nav>
+
+      <section id="practiceView" class="view panel">
+        <div class="section-heading"><div><p class="eyebrow">RECALL PRACTICE</p><h2>看照片，想起名字</h2></div><span class="round-icon">✦</span></div>
+        <div class="practice-controls">
+          <label>練習哪一級<select id="practicePriority"><option value="1">最想熟悉</option><option value="2">正在熟悉</option><option value="3">之後再熟悉</option></select></label>
+          <button id="startPractice" class="button primary" type="button">開始這一輪</button>
+        </div>
+        <div id="quizCard" class="quiz-card hidden">
+          <div class="quiz-meta"><span id="questionCounter">準備中</span><span class="pill">隨機循環</span></div>
+          <div class="portrait-frame"><img id="quizPhoto" alt="請輸入照片中人物的姓名"><div id="photoPlaceholder" class="photo-placeholder">照片載入中</div></div>
+          <form id="answerForm" class="answer-row">
+            <label class="sr-only" for="answerInput">輸入照片中人物的姓名</label><input id="answerInput" autocomplete="off" placeholder="輸入這個人的姓名" required>
+            <button class="button primary" type="submit">確認</button>
+          </form>
+          <div id="answerFeedback" class="feedback hidden" aria-live="polite"></div>
+          <button id="nextQuestion" class="button secondary hidden" type="button">下一題</button>
+        </div>
+        <div id="emptyPractice" class="empty-state"><span>✧</span><p>先在「我的優先級」選擇想熟悉的人，再開始練習。</p></div>
+      </section>
+
+      <section id="prioritiesView" class="view panel hidden">
+        <div class="section-heading"><div><p class="eyebrow">MY LEARNING PLAN</p><h2>安排自己的熟悉順序</h2></div><span class="round-icon">◎</span></div>
+        <p class="muted">每個人的設定只影響自己的練習。選擇人物，再指定想優先熟悉的程度。</p>
+        <div id="priorityPeople" class="people-grid"></div>
+        <div id="priorityEmpty" class="empty-state hidden"><span>✧</span><p>目前團體還沒有可練習的人物資料。</p></div>
+      </section>
+
+      <section id="manageView" class="view panel hidden">
+        <div class="section-heading"><div><p class="eyebrow">AUTHORIZED MANAGER</p><h2>人物管理</h2></div><span class="round-icon">＋</span></div>
+        <form id="personForm" class="manager-form">
+          <input id="personId" type="hidden">
+          <label>姓名<input id="personName" maxlength="120" required placeholder="例如：林小明"></label>
+          <label>別名（以逗號或換行分隔）<textarea id="personAliases" rows="2" placeholder="例如：小明、Ming"></textarea></label>
+          <label>人物照片<input id="personPhoto" type="file" accept="image/*"></label>
+          <div id="photoPreviewWrap" class="photo-preview-wrap hidden"><img id="photoPreview" alt="照片預覽"><span id="compressionStatus" class="small-note"></span></div>
+          <div class="form-actions"><button id="savePerson" class="button primary" type="submit">新增人物</button><button id="cancelPersonEdit" class="button quiet hidden" type="button">取消編輯</button></div>
+          <p class="small-note">照片會先在瀏覽器縮小與壓縮，目標約 100 KB，再上傳至非公開空間。</p>
+        </form>
+        <div class="divider"></div><h3 class="subheading">團體人物名單</h3><div id="adminPeople" class="admin-people-list"></div>
+      </section>
+
+      <section id="membersView" class="view panel hidden">
+        <div class="section-heading"><div><p class="eyebrow">GROUP ACCESS</p><h2>成員管理</h2></div><span class="round-icon">♧</span></div>
+        <p class="muted">輸入已在 P130 註冊的 Email，將使用者加入目前團體。角色可設定為管理者或一般成員。</p>
+        <form id="memberForm" class="member-form">
+          <label>成員 Email<input id="memberEmail" type="email" required placeholder="name@example.com"></label>
+          <label>角色<select id="memberRole"><option value="participant">一般成員</option><option value="admin">管理者</option></select></label>
+          <button class="button primary" type="submit">加入成員</button>
+        </form>
+        <p id="memberFeedback" class="small-note" aria-live="polite"></p>
+      </section>
+    </section>
+
+    <footer class="site-footer"><span>P139 新人的考驗 · V0.1</span><span>封閉團體使用｜珍惜每一張人物照片</span></footer>
+  </main>
+</body>
+</html>
