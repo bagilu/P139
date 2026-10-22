@@ -38,6 +38,20 @@ ALTER TABLE public."TblP139Person"
   ADD COLUMN IF NOT EXISTS recognition_priority smallint NOT NULL DEFAULT 2
   CHECK (recognition_priority BETWEEN 1 AND 3);
 
+CREATE TABLE IF NOT EXISTS public."TblP139GroupPerson" (
+  organization_id uuid NOT NULL REFERENCES public."TblP139Organization"(id) ON DELETE CASCADE,
+  person_id uuid NOT NULL REFERENCES public."TblP139Person"(id) ON DELETE CASCADE,
+  recognition_priority smallint NOT NULL DEFAULT 2 CHECK (recognition_priority BETWEEN 1 AND 3),
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (organization_id,person_id)
+);
+
+-- Upgrade existing records: every person keeps their original group association and priority.
+INSERT INTO public."TblP139GroupPerson"(organization_id,person_id,recognition_priority,is_active)
+SELECT organization_id,id,recognition_priority,is_active FROM public."TblP139Person"
+ON CONFLICT (organization_id,person_id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS public."TblP139Alias" (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   person_id uuid NOT NULL REFERENCES public."TblP139Person"(id) ON DELETE CASCADE,
@@ -66,6 +80,8 @@ CREATE TABLE IF NOT EXISTS public."TblP139AnswerEvent" (
 
 CREATE INDEX IF NOT EXISTS "IX_P139Membership_User" ON public."TblP139Membership"(user_id,is_active);
 CREATE INDEX IF NOT EXISTS "IX_P139Person_Organization" ON public."TblP139Person"(organization_id,is_active);
+CREATE INDEX IF NOT EXISTS "IX_P139GroupPerson_Group" ON public."TblP139GroupPerson"(organization_id,is_active,recognition_priority);
+CREATE INDEX IF NOT EXISTS "IX_P139GroupPerson_Person" ON public."TblP139GroupPerson"(person_id,is_active);
 CREATE INDEX IF NOT EXISTS "IX_P139Alias_Person" ON public."TblP139Alias"(person_id);
 CREATE INDEX IF NOT EXISTS "IX_P139Priority_User_Person" ON public."TblP139UserPriority"(user_id,person_id);
 CREATE INDEX IF NOT EXISTS "IX_P139Answer_User_Person_Time" ON public."TblP139AnswerEvent"(user_id,person_id,created_at DESC);
@@ -74,6 +90,7 @@ ALTER TABLE public."TblP139Organization" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139Membership" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139SystemAdmin" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139Person" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."TblP139GroupPerson" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139Alias" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139UserPriority" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139AnswerEvent" ENABLE ROW LEVEL SECURITY;
@@ -86,6 +103,8 @@ CREATE POLICY "P139 no direct access" ON public."TblP139Membership" FOR ALL TO a
 DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139SystemAdmin";
 CREATE POLICY "P139 no direct access" ON public."TblP139SystemAdmin" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);
 DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139Person";
+DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139GroupPerson";
+CREATE POLICY "P139 no direct access" ON public."TblP139GroupPerson" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);
 CREATE POLICY "P139 no direct access" ON public."TblP139Person" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);
 DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139Alias";
 CREATE POLICY "P139 no direct access" ON public."TblP139Alias" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);

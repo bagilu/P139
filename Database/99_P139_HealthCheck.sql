@@ -1,8 +1,8 @@
 -- Run after setup. Every row should report PASS.
 WITH expected_tables(name) AS (
-  VALUES ('TblP139Organization'),('TblP139Membership'),('TblP139SystemAdmin'),('TblP139Person'),('TblP139Alias'),('TblP139UserPriority'),('TblP139AnswerEvent')
+  VALUES ('TblP139Organization'),('TblP139Membership'),('TblP139SystemAdmin'),('TblP139Person'),('TblP139GroupPerson'),('TblP139Alias'),('TblP139UserPriority'),('TblP139AnswerEvent')
 ), expected_rpcs(name,anonymous_access) AS (
-  VALUES ('p139_public_list_groups',true),('p139_public_list_people',true),('p139_public_check_answer',true),
+  VALUES ('p139_public_list_groups',true),('p139_public_list_people',true),('p139_public_check_answer',true),('p139_list_available_people',false),('p139_add_person_to_group',false),('p139_remove_person_from_group',false),
          ('p139_is_system_admin',false),('p139_create_group',false),('p139_list_my_organizations',false),
          ('p139_list_people_for_admin',false),('p139_save_person',false),('p139_set_person_active',false),('p139_can_access_storage',false)
 )

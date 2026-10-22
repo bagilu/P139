@@ -30,7 +30,7 @@ RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
-  SELECT EXISTS (
+  SELECT public.p139_is_system_admin() OR EXISTS (
     SELECT 1 FROM public."TblP139Membership" m
     JOIN public."TblP139Organization" o ON o.id=m.organization_id AND o.is_active
     WHERE m.organization_id=p_org_id AND m.user_id=auth.uid() AND m.is_active
@@ -316,6 +316,170 @@ BEGIN
   INSERT INTO public."TblP139Membership"(organization_id,user_id,role,is_active) VALUES(v_org_id,v_user_id,'admin',true);
   INSERT INTO public."TblP139SystemAdmin"(user_id) VALUES(v_user_id);
   RETURN jsonb_build_object('organization_id',v_org_id,'admin_email',lower(btrim(p_admin_email)));
+END;
+$$;
+
+-- V0.5 multi-group profile model: one person/photo can be linked to several groups.
+CREATE OR REPLACE FUNCTION public.p139_public_list_groups()
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('id',o.id,'name',o.name) ORDER BY o.name),'[]'::jsonb)
+  FROM public."TblP139Organization" o
+  WHERE o.is_active AND EXISTS (
+    SELECT 1 FROM public."TblP139GroupPerson" gp JOIN public."TblP139Person" p ON p.id=gp.person_id
+    WHERE gp.organization_id=o.id AND gp.is_active
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_public_list_people(p_org_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT jsonb_agg(jsonb_build_object('id',p.id,'display_name',p.display_name,'photo_path',p.photo_path,
+      'recognition_priority',gp.recognition_priority,'aliases',COALESCE(a.aliases,'[]'::jsonb)) ORDER BY p.display_name)
+    FROM public."TblP139GroupPerson" gp
+    JOIN public."TblP139Person" p ON p.id=gp.person_id
+    JOIN public."TblP139Organization" o ON o.id=gp.organization_id AND o.is_active
+    LEFT JOIN LATERAL (SELECT jsonb_agg(x.alias ORDER BY x.alias) AS aliases FROM public."TblP139Alias" x WHERE x.person_id=p.id) a ON true
+    WHERE gp.organization_id=p_org_id AND gp.is_active
+  ),'[]'::jsonb);
+END;
+$$;
+
+DROP FUNCTION IF EXISTS public.p139_public_check_answer(uuid,text);
+CREATE OR REPLACE FUNCTION public.p139_public_check_answer(p_org_id uuid,p_person_id uuid,p_answer text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+DECLARE v_name text; v_correct boolean; v_confused text; v_answer text; v_normalized text;
+BEGIN
+  v_answer:=btrim(COALESCE(p_answer,''));
+  IF length(v_answer)<1 OR length(v_answer)>160 THEN RAISE EXCEPTION 'invalid answer'; END IF;
+  SELECT p.display_name INTO v_name
+  FROM public."TblP139GroupPerson" gp JOIN public."TblP139Person" p ON p.id=gp.person_id
+  JOIN public."TblP139Organization" o ON o.id=gp.organization_id AND o.is_active
+  WHERE gp.organization_id=p_org_id AND gp.person_id=p_person_id AND gp.is_active;
+  IF v_name IS NULL THEN RAISE EXCEPTION 'person not found in group'; END IF;
+  v_normalized:=lower(regexp_replace(v_answer,'\s+','','g'));
+  SELECT (lower(regexp_replace(v_name,'\s+','','g'))=v_normalized OR EXISTS(
+    SELECT 1 FROM public."TblP139Alias" a WHERE a.person_id=p_person_id AND lower(regexp_replace(a.alias,'\s+','','g'))=v_normalized
+  )) INTO v_correct;
+  IF NOT v_correct THEN
+    SELECT p.display_name INTO v_confused FROM public."TblP139GroupPerson" gp
+    JOIN public."TblP139Person" p ON p.id=gp.person_id
+    WHERE gp.organization_id=p_org_id AND gp.is_active AND p.id<>p_person_id
+      AND (lower(regexp_replace(p.display_name,'\s+','','g'))=v_normalized OR EXISTS(
+        SELECT 1 FROM public."TblP139Alias" a WHERE a.person_id=p.id AND lower(regexp_replace(a.alias,'\s+','','g'))=v_normalized
+      )) LIMIT 1;
+  END IF;
+  RETURN jsonb_build_object('is_correct',v_correct,'correct_name',v_name,'confused_with',v_confused);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_list_people_for_admin(p_org_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NOT public.p139_is_member(p_org_id,true) THEN RAISE EXCEPTION 'not authorized'; END IF;
+  RETURN COALESCE((
+    SELECT jsonb_agg(jsonb_build_object('id',p.id,'display_name',p.display_name,'photo_path',p.photo_path,
+      'recognition_priority',gp.recognition_priority,'is_active',gp.is_active,'aliases',COALESCE(a.aliases,'[]'::jsonb)) ORDER BY p.display_name)
+    FROM public."TblP139GroupPerson" gp JOIN public."TblP139Person" p ON p.id=gp.person_id
+    LEFT JOIN LATERAL (SELECT jsonb_agg(x.alias ORDER BY x.alias) AS aliases FROM public."TblP139Alias" x WHERE x.person_id=p.id) a ON true
+    WHERE gp.organization_id=p_org_id
+  ),'[]'::jsonb);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_list_available_people(p_org_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NOT public.p139_is_system_admin() OR NOT EXISTS(SELECT 1 FROM public."TblP139Organization" WHERE id=p_org_id AND is_active) THEN RAISE EXCEPTION 'system administrator required'; END IF;
+  RETURN COALESCE((
+    SELECT jsonb_agg(jsonb_build_object('id',p.id,'display_name',p.display_name,'photo_path',p.photo_path,'source_group',o.name) ORDER BY p.display_name,o.name)
+    FROM public."TblP139Person" p JOIN public."TblP139Organization" o ON o.id=p.organization_id
+    WHERE NOT EXISTS(SELECT 1 FROM public."TblP139GroupPerson" gp WHERE gp.organization_id=p_org_id AND gp.person_id=p.id AND gp.is_active)
+  ),'[]'::jsonb);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_add_person_to_group(p_org_id uuid,p_person_id uuid,p_recognition_priority smallint DEFAULT 2)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NOT public.p139_is_system_admin() THEN RAISE EXCEPTION 'system administrator required'; END IF;
+  IF p_recognition_priority NOT BETWEEN 1 AND 3 OR NOT EXISTS(SELECT 1 FROM public."TblP139Person" WHERE id=p_person_id)
+    OR NOT EXISTS(SELECT 1 FROM public."TblP139Organization" WHERE id=p_org_id AND is_active) THEN RAISE EXCEPTION 'invalid group or person'; END IF;
+  INSERT INTO public."TblP139GroupPerson"(organization_id,person_id,recognition_priority,is_active)
+  VALUES(p_org_id,p_person_id,p_recognition_priority,true)
+  ON CONFLICT(organization_id,person_id) DO UPDATE SET recognition_priority=EXCLUDED.recognition_priority,is_active=true;
+  RETURN jsonb_build_object('ok',true,'person_id',p_person_id);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_remove_person_from_group(p_org_id uuid,p_person_id uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NOT public.p139_is_member(p_org_id,true) THEN RAISE EXCEPTION 'not authorized'; END IF;
+  UPDATE public."TblP139GroupPerson" SET is_active=false WHERE organization_id=p_org_id AND person_id=p_person_id;
+  RETURN jsonb_build_object('ok',true);
+END;
+$$;
+
+DROP FUNCTION IF EXISTS public.p139_set_person_active(uuid,boolean);
+CREATE OR REPLACE FUNCTION public.p139_set_person_active(p_org_id uuid,p_person_id uuid,p_is_active boolean)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NOT public.p139_is_member(p_org_id,true) THEN RAISE EXCEPTION 'not authorized'; END IF;
+  UPDATE public."TblP139GroupPerson" SET is_active=p_is_active WHERE organization_id=p_org_id AND person_id=p_person_id;
+  RETURN jsonb_build_object('ok',true);
+END;
+$$;
+
+DROP FUNCTION IF EXISTS public.p139_save_person(uuid,uuid,text,jsonb,text,smallint);
+CREATE FUNCTION public.p139_save_person(p_org_id uuid,p_person_id uuid,p_display_name text,p_aliases jsonb,p_photo_path text,p_recognition_priority smallint DEFAULT 2)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+DECLARE v_alias text; v_norm text; v_primary_org uuid; v_primary_photo text;
+BEGIN
+  IF NOT public.p139_is_member(p_org_id,true) THEN RAISE EXCEPTION 'not authorized'; END IF;
+  IF p_person_id IS NULL OR length(btrim(COALESCE(p_display_name,''))) NOT BETWEEN 1 AND 120 OR p_recognition_priority NOT BETWEEN 1 AND 3 THEN RAISE EXCEPTION 'invalid person data'; END IF;
+  IF jsonb_typeof(COALESCE(p_aliases,'[]'::jsonb))<>'array' THEN RAISE EXCEPTION 'aliases must be a list'; END IF;
+  IF EXISTS(
+    SELECT 1 FROM public."TblP139GroupPerson" gp JOIN public."TblP139Person" p ON p.id=gp.person_id
+    WHERE gp.organization_id=p_org_id AND gp.is_active AND p.id<>p_person_id
+      AND lower(regexp_replace(p.display_name,'\s+','','g'))=lower(regexp_replace(btrim(p_display_name),'\s+','','g'))
+  ) THEN RAISE EXCEPTION 'duplicate name in group'; END IF;
+  SELECT organization_id,photo_path INTO v_primary_org,v_primary_photo FROM public."TblP139Person" WHERE id=p_person_id;
+  IF v_primary_org IS NULL THEN
+    IF p_photo_path<>p_org_id::text||'/'||p_person_id::text||'.jpg' THEN RAISE EXCEPTION 'invalid photo path'; END IF;
+    INSERT INTO public."TblP139Person"(id,organization_id,display_name,photo_path,recognition_priority,is_active,updated_at)
+    VALUES(p_person_id,p_org_id,btrim(p_display_name),p_photo_path,p_recognition_priority,true,now());
+  ELSE
+    IF p_photo_path<>v_primary_org::text||'/'||p_person_id::text||'.jpg' THEN RAISE EXCEPTION 'invalid photo path'; END IF;
+    IF v_primary_org<>p_org_id AND NOT public.p139_is_system_admin() THEN RAISE EXCEPTION 'system administrator required to edit a shared profile'; END IF;
+    UPDATE public."TblP139Person" SET display_name=btrim(p_display_name),photo_path=p_photo_path,is_active=true,updated_at=now() WHERE id=p_person_id;
+  END IF;
+  INSERT INTO public."TblP139GroupPerson"(organization_id,person_id,recognition_priority,is_active)
+  VALUES(p_org_id,p_person_id,p_recognition_priority,true)
+  ON CONFLICT(organization_id,person_id) DO UPDATE SET recognition_priority=EXCLUDED.recognition_priority,is_active=true;
+  DELETE FROM public."TblP139Alias" WHERE person_id=p_person_id;
+  FOR v_alias IN SELECT btrim(t.alias_value) FROM jsonb_array_elements_text(COALESCE(p_aliases,'[]'::jsonb)) AS t(alias_value) LOOP
+    IF v_alias<>'' THEN
+      v_norm:=lower(regexp_replace(v_alias,'\s+','','g'));
+      IF lower(regexp_replace(btrim(p_display_name),'\s+','','g'))=v_norm THEN CONTINUE; END IF;
+      IF EXISTS(SELECT 1 FROM public."TblP139GroupPerson" gp JOIN public."TblP139Person" p ON p.id=gp.person_id
+        WHERE gp.organization_id=p_org_id AND gp.is_active AND p.id<>p_person_id AND lower(regexp_replace(p.display_name,'\s+','','g'))=v_norm)
+       OR EXISTS(SELECT 1 FROM public."TblP139Alias" a JOIN public."TblP139GroupPerson" gp ON gp.person_id=a.person_id
+        WHERE gp.organization_id=p_org_id AND gp.is_active AND a.person_id<>p_person_id AND lower(regexp_replace(a.alias,'\s+','','g'))=v_norm)
+      THEN RAISE EXCEPTION 'alias conflicts with another person in group'; END IF;
+      INSERT INTO public."TblP139Alias"(person_id,alias) VALUES(p_person_id,v_alias) ON CONFLICT(person_id,alias) DO NOTHING;
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('ok',true,'person_id',p_person_id);
 END;
 $$;
 

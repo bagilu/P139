@@ -31,7 +31,7 @@
     $('orgSelect').addEventListener('change',()=>{state.org=state.orgs.find(x=>x.id===$('orgSelect').value)||null;loadAdminPeople();});
     $('publicGroupSelect').addEventListener('change',async()=>{state.group=state.groups.find(g=>g.id===$('publicGroupSelect').value)||null;state.people=[];clearQuiz();if(state.group)await loadPublicPeople();renderPersonalStats();});
     $('startPractice').addEventListener('click',startPractice);$('answerForm').addEventListener('submit',submitAnswer);$('nextQuestion').addEventListener('click',nextQuestion);
-    $('clearPersonalData').addEventListener('click',clearPersonalData);$('migrateLegacyPhotos').addEventListener('click',migrateLegacyPhotos);$('personPhoto').addEventListener('change',previewPhoto);$('personForm').addEventListener('submit',savePerson);$('cancelPersonEdit').addEventListener('click',resetPersonForm);$('groupForm').addEventListener('submit',createGroup);
+    $('clearPersonalData').addEventListener('click',clearPersonalData);$('migrateLegacyPhotos').addEventListener('click',migrateLegacyPhotos);$('addExistingPerson').addEventListener('click',addExistingPerson);$('personPhoto').addEventListener('change',previewPhoto);$('personForm').addEventListener('submit',savePerson);$('cancelPersonEdit').addEventListener('click',resetPersonForm);$('groupForm').addEventListener('submit',createGroup);
   }
 
   async function loadPublicGroups() {
@@ -47,11 +47,11 @@
   async function loadPublicPeople() {
     if(!state.group)return;
     const {data,error}=await rpc('p139_public_list_people',{p_org_id:state.group.id});
-    if(error){setNotice('無法載入人物名單。');return;}
+    if(error){state.people=[];const code=error.code?' ['+error.code+']':'';setNotice('無法載入人物名單：'+(error.message||'未知 Supabase 錯誤')+code);return;}
     state.people=list(data);
   }
 
-  function photoUrl(path) { if(!path||!state.sb)return '';return state.sb.storage.from('p139-public').getPublicUrl(path).data.publicUrl; }
+  function photoUrl(path) { if(!path||!state.sb)return '';return state.sb.storage.from('p139-public').getPublicUrl(path).data.publicUrl+'?v='+Date.now(); }
 
   function clearQuiz() { state.cycle=[];state.cycleIndex=0;state.currentPerson=null;$('quizCard').classList.add('hidden');$('emptyPractice').classList.remove('hidden'); }
   async function startPractice() {
@@ -74,7 +74,7 @@
   async function submitAnswer(event) {
     event.preventDefault();if(!state.currentPerson||!state.group)return;const answer=$('answerInput').value.trim();if(!answer)return;
     const button=$('answerForm').querySelector('button');setLoading(button,true,'比對中…');$('answerInput').disabled=true;
-    const {data,error}=await rpc('p139_public_check_answer',{p_person_id:state.currentPerson.person_id,p_answer:answer});setLoading(button,false);
+    const {data,error}=await rpc('p139_public_check_answer',{p_org_id:state.group.id,p_person_id:state.currentPerson.person_id,p_answer:answer});setLoading(button,false);
     if(error){$('answerInput').disabled=false;$('answerFeedback').className='feedback incorrect';$('answerFeedback').textContent='比對失敗，請稍後再試。';return;}
     const result=Array.isArray(data)?data[0]:data;const learning=getLearning(state.group.id);const person=learning[state.currentPerson.person_id]||{attempts:0,correct:0,wrong:[]};person.attempts++;if(result.is_correct)person.correct++;else{person.wrong=[answer,...(person.wrong||[])].slice(0,5);}learning[state.currentPerson.person_id]=person;saveLearning(state.group.id,learning);
     const box=$('answerFeedback');box.className='feedback '+(result.is_correct?'correct':'incorrect');box.textContent=result.is_correct?'答對了！ '+result.correct_name:'這次沒有答對。正確姓名是「'+result.correct_name+'」。';
@@ -87,36 +87,91 @@
   function clearPersonalData(){if(state.group)localStorage.removeItem(localKey(state.group.id));renderPersonalStats();setNotice('已清除目前群組的本機練習紀錄。');}
 
   async function login(event){event.preventDefault();$('loginError').textContent='';if(!state.sb){$('loginError').textContent='請先完成 Supabase 設定。';return;}const button=$('loginForm').querySelector('button[type="submit"]');setLoading(button,true,'驗證中…');const {data,error}=await state.sb.auth.signInWithPassword({email:$('emailInput').value.trim(),password:$('passwordInput').value});setLoading(button,false);if(error){$('loginError').textContent='登入失敗，請確認管理者帳號密碼。';return;}state.user=data.user;await enterAdmin();}
-  async function enterAdmin(){const {data,error}=await rpc('p139_list_my_organizations');if(error){$('loginError').textContent='無法確認管理權限。';await state.sb.auth.signOut({scope:'local'});return;}state.orgs=list(data);if(!state.orgs.length){$('loginError').textContent='此帳號沒有 P139 管理群組權限。';await state.sb.auth.signOut({scope:'local'});state.user=null;return;}const adminCheck=await rpc('p139_is_system_admin');state.isSystemAdmin=!adminCheck.error&&Boolean(adminCheck.data);$('adminPanel').classList.remove('hidden');$('adminLoginPanel').classList.add('hidden');$('userEmail').textContent=state.user.email||'';$('orgSelect').innerHTML=state.orgs.map(g=>'<option value="'+escapeHtml(g.id)+'">'+escapeHtml(g.name)+'</option>').join('');state.org=state.orgs[0];$('orgSelect').value=state.org.id;$('createGroupPanel').classList.toggle('hidden',!state.isSystemAdmin);await loadAdminPeople();}
+  async function enterAdmin(preferredOrgId=null){
+    const {data,error}=await rpc('p139_list_my_organizations');
+    if(error){$('loginError').textContent='無法確認管理權限：'+error.message;await state.sb.auth.signOut({scope:'local'});return;}
+    state.orgs=list(data);
+    if(!state.orgs.length){$('loginError').textContent='此帳號沒有 P139 管理群組權限。';await state.sb.auth.signOut({scope:'local'});state.user=null;return;}
+    const adminCheck=await rpc('p139_is_system_admin');state.isSystemAdmin=!adminCheck.error&&adminCheck.data===true;
+    $('adminPanel').classList.remove('hidden');$('adminLoginPanel').classList.add('hidden');$('userEmail').textContent=state.user.email||'';
+    $('orgSelect').innerHTML=state.orgs.map(g=>'<option value="'+escapeHtml(g.id)+'">'+escapeHtml(g.name)+'</option>').join('');
+    state.org=state.orgs.find(g=>g.id===preferredOrgId)||state.orgs[0];$('orgSelect').value=state.org.id;
+    $('createGroupPanel').classList.remove('hidden');$('groupForm').classList.toggle('hidden',!state.isSystemAdmin);$('systemAdminHint').classList.toggle('hidden',state.isSystemAdmin);
+    await loadAdminPeople();
+  }
   async function logout(){if(state.sb)await state.sb.auth.signOut({scope:'local'});state.user=null;state.orgs=[];state.org=null;state.isSystemAdmin=false;$('adminPanel').classList.add('hidden');$('adminLoginPanel').classList.remove('hidden');$('adminLoginFormWrap').classList.add('hidden');$('passwordInput').value='';$('loginError').textContent='';}
-  async function createGroup(event){event.preventDefault();const button=$('groupForm').querySelector('button');setLoading(button,true,'建立中…');const {data,error}=await rpc('p139_create_group',{p_group_name:$('groupName').value.trim()});setLoading(button,false);if(error){setNotice('建立群組失敗：'+error.message);return;}$('groupForm').reset();const result=Array.isArray(data)?data[0]:data;await enterAdmin();if(result&&result.group_id){state.org=state.orgs.find(g=>g.id===result.group_id)||state.org;$('orgSelect').value=state.org.id;}await loadAdminPeople();await loadPublicGroups();setNotice('群組已建立。');}
-
+  async function createGroup(event){
+    event.preventDefault();const button=$('groupForm').querySelector('button');setLoading(button,true,'建立中…');
+    const {data,error}=await rpc('p139_create_group',{p_group_name:$('groupName').value.trim()});setLoading(button,false);
+    if(error){setNotice('建立群組失敗：'+error.message);return;}
+    const result=Array.isArray(data)?data[0]:data;$('groupForm').reset();await enterAdmin(result&&result.group_id?result.group_id:null);await loadPublicGroups();setNotice('群組已建立。');
+  }
   async function compressImage(file){if(!file||!file.type.startsWith('image/'))throw new Error('請選擇圖片檔。');const bitmap=await createImageBitmap(file,{imageOrientation:'from-image'});let scale=Math.min(1,1200/Math.max(bitmap.width,bitmap.height)),width=Math.round(bitmap.width*scale),height=Math.round(bitmap.height*scale),quality=.86,blob=null;for(let i=0;i<18;i++){const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const ctx=canvas.getContext('2d',{alpha:false});ctx.fillStyle='#fff';ctx.fillRect(0,0,width,height);ctx.drawImage(bitmap,0,0,width,height);blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',quality));if(blob&&blob.size<=102400)break;if(quality>.48)quality-=.07;else{width=Math.max(320,Math.round(width*.86));height=Math.max(320,Math.round(height*.86));quality=.76;}}bitmap.close();if(!blob)throw new Error('照片壓縮失敗。');return new File([blob],'portrait.jpg',{type:'image/jpeg',lastModified:Date.now()});}
   async function previewPhoto(){const file=$('personPhoto').files&&$('personPhoto').files[0];if(!file)return;$('compressionStatus').textContent='正在壓縮照片…';$('photoPreviewWrap').classList.remove('hidden');try{state.pendingPhoto=await compressImage(file);$('photoPreview').src=URL.createObjectURL(state.pendingPhoto);$('compressionStatus').textContent='已壓縮至 '+Math.round(state.pendingPhoto.size/1024)+' KB。';}catch(e){state.pendingPhoto=null;$('compressionStatus').textContent=e.message;}}
   async function uploadPhoto(file,path){const {error}=await state.sb.storage.from('p139-public').upload(path,file,{contentType:'image/jpeg',upsert:true,cacheControl:'3600'});if(error)throw new Error('照片上傳失敗：'+error.message);return path;}
-  async function savePerson(event){event.preventDefault();if(!state.user||!state.org)return;const id=$('personId').value||crypto.randomUUID(),name=$('personName').value.trim(),aliases=$('personAliases').value.split(/[\n,，]/).map(x=>x.trim()).filter(Boolean);let photoPath=state.editingPhotoPath||null;const button=$('savePerson');setLoading(button,true,'儲存中…');try{if(state.pendingPhoto){photoPath=state.org.id+'/'+id+'.jpg';await uploadPhoto(state.pendingPhoto,photoPath);}if(!photoPath)throw new Error('請上傳人物照片。');const {error}=await rpc('p139_save_person',{p_org_id:state.org.id,p_person_id:id,p_display_name:name,p_aliases:aliases,p_photo_path:photoPath,p_recognition_priority:Number($('personPriority').value)});if(error)throw new Error('人物資料儲存失敗：'+error.message);resetPersonForm();await loadAdminPeople();await loadPublicGroups();setNotice('人物資料已儲存。');}catch(e){setNotice(e.message);}finally{setLoading(button,false);}}
+  async function savePerson(event){event.preventDefault();if(!state.user||!state.org)return;const id=$('personId').value||crypto.randomUUID(),name=$('personName').value.trim(),aliases=$('personAliases').value.split(/[\n,，]/).map(x=>x.trim()).filter(Boolean);let photoPath=state.editingPhotoPath||null;const button=$('savePerson');setLoading(button,true,'儲存中…');try{if(state.pendingPhoto){photoPath=state.editingPhotoPath||state.org.id+'/'+id+'.jpg';await uploadPhoto(state.pendingPhoto,photoPath);}if(!photoPath)throw new Error('請上傳人物照片。');const {error}=await rpc('p139_save_person',{p_org_id:state.org.id,p_person_id:id,p_display_name:name,p_aliases:aliases,p_photo_path:photoPath,p_recognition_priority:Number($('personPriority').value)});if(error)throw new Error('人物資料儲存失敗：'+error.message);resetPersonForm();await loadAdminPeople();await loadPublicGroups();setNotice('人物資料已儲存。');}catch(e){setNotice(e.message);}finally{setLoading(button,false);}}
   function resetPersonForm(){$('personForm').reset();$('personId').value='';state.editingPhotoPath=null;state.pendingPhoto=null;$('photoPreviewWrap').classList.add('hidden');$('cancelPersonEdit').classList.add('hidden');$('savePerson').textContent='新增人物';}
-  async function loadAdminPeople(){if(!state.user||!state.org)return;const root=$('adminPeople');root.innerHTML='<p class="muted">載入名單中…</p>';const {data,error}=await rpc('p139_list_people_for_admin',{p_org_id:state.org.id});if(error){root.textContent='無法載入人物名單。';return;}const rows=list(data);root.innerHTML='';rows.forEach(person=>{const row=document.createElement('div');row.className='admin-person';const img=document.createElement('img');img.src=photoUrl(person.photo_path);img.alt='';const name=document.createElement('div');name.className='person-name';name.innerHTML=escapeHtml(person.display_name)+'<div class="small-note">'+priorityLabels[person.recognition_priority]+' · '+(person.is_active?'使用中':'已停用')+(person.aliases&&person.aliases.length?' · 別名：'+escapeHtml(person.aliases.join('、')):'')+'</div>';const actions=document.createElement('div');actions.className='admin-actions';const edit=document.createElement('button');edit.className='button quiet';edit.type='button';edit.textContent='編輯';edit.addEventListener('click',()=>editPerson(person));const active=document.createElement('button');active.className='button secondary';active.type='button';active.textContent=person.is_active?'停用':'啟用';active.addEventListener('click',()=>togglePerson(person));actions.append(edit,active);row.append(img,name,actions);root.appendChild(row);});if(!rows.length)root.innerHTML='<p class="muted">此群組尚未建立人物資料。</p>';}
+  async function loadAdminPeople(){
+    if(!state.user||!state.org)return;
+    const root=$('adminPeople');root.innerHTML='<p class="muted">載入名單中…</p>';
+    const {data,error}=await rpc('p139_list_people_for_admin',{p_org_id:state.org.id});
+    if(error){root.textContent='無法載入人物名單：'+error.message;return;}
+    const rows=list(data);root.innerHTML='';
+    rows.forEach(person=>{
+      const row=document.createElement('div');row.className='admin-person';const img=document.createElement('img');img.src=photoUrl(person.photo_path);img.alt='';img.onerror=()=>{img.title='公開照片無法讀取：p139-public/'+person.photo_path+'。請確認 config.js 指向原 Supabase 專案且該物件存在。';};
+      const name=document.createElement('div');name.className='person-name';name.innerHTML=escapeHtml(person.display_name)+'<div class="small-note">'+priorityLabels[person.recognition_priority]+' · '+(person.is_active?'本群組使用中':'已從本群組移除')+(person.aliases&&person.aliases.length?' · 別名：'+escapeHtml(person.aliases.join('、')):'')+'</div>';
+      const actions=document.createElement('div');actions.className='admin-actions';const edit=document.createElement('button');edit.className='button quiet';edit.type='button';edit.textContent='編輯';edit.addEventListener('click',()=>editPerson(person));
+      const active=document.createElement('button');active.className='button secondary';active.type='button';active.textContent=person.is_active?'移出群組':'重新加入';active.addEventListener('click',()=>togglePerson(person));
+      actions.append(edit,active);row.append(img,name,actions);root.appendChild(row);
+    });
+    if(!rows.length)root.innerHTML='<p class="muted">此群組尚未建立人物資料。</p>';
+    await loadAvailablePeople();
+  }
   function editPerson(person){$('personId').value=person.id;$('personName').value=person.display_name;$('personAliases').value=(person.aliases||[]).join('\n');$('personPriority').value=String(person.recognition_priority||2);state.editingPhotoPath=person.photo_path;state.pendingPhoto=null;$('photoPreviewWrap').classList.remove('hidden');$('compressionStatus').textContent='若不選新照片，將保留原照片。';$('photoPreview').src=photoUrl(person.photo_path);$('cancelPersonEdit').classList.remove('hidden');$('savePerson').textContent='儲存修改';$('personName').scrollIntoView({behavior:'smooth',block:'center'});}
-  async function togglePerson(person){const {error}=await rpc('p139_set_person_active',{p_person_id:person.id,p_is_active:!person.is_active});if(error){setNotice('更新人物狀態失敗。');return;}await loadAdminPeople();await loadPublicGroups();}
+  async function togglePerson(person){
+    const {error}=await rpc('p139_set_person_active',{p_org_id:state.org.id,p_person_id:person.id,p_is_active:!person.is_active});
+    if(error){setNotice('更新群組人物狀態失敗：'+error.message);return;}await loadAdminPeople();await loadPublicGroups();
+  }
+  async function loadAvailablePeople(){
+    const select=$('availablePersonSelect');if(!select)return;
+    if(!state.isSystemAdmin||!state.org){select.innerHTML='<option value="">需要系統管理者權限</option>';if($('addExistingPerson'))$('addExistingPerson').disabled=true;return;}
+    const {data,error}=await rpc('p139_list_available_people',{p_org_id:state.org.id});
+    if(error){select.innerHTML='<option value="">無法載入可加入人物</option>'; $('addExistingPerson').disabled=true;return;}
+    const people=list(data);select.innerHTML=people.length?people.map(p=>'<option value="'+escapeHtml(p.id)+'">'+escapeHtml(p.display_name)+(p.source_group?' · '+escapeHtml(p.source_group):'')+'</option>').join(''):'<option value="">沒有可加入的人物</option>';
+    $('addExistingPerson').disabled=!people.length;
+  }
+  async function addExistingPerson(){
+    const personId=$('availablePersonSelect').value;if(!personId||!state.org)return;
+    const button=$('addExistingPerson');setLoading(button,true,'加入中…');
+    const {error}=await rpc('p139_add_person_to_group',{p_org_id:state.org.id,p_person_id:personId,p_recognition_priority:Number($('availablePersonPriority').value)});
+    setLoading(button,false);if(error){setNotice('加入既有教師失敗：'+error.message);return;}
+    await loadAdminPeople();await loadPublicGroups();setNotice('教師已加入此群組；人物資料與照片仍由同一份共用檔案管理。');
+  }
+
   async function migrateLegacyPhotos(){
     if(!state.user||!state.org)return;
     const button=$('migrateLegacyPhotos');setLoading(button,true,'搬移中…');setNotice('正在檢查此群組的舊版照片…');
     const {data,error}=await rpc('p139_list_people_for_admin',{p_org_id:state.org.id});
     if(error){setNotice('無法讀取群組名單：'+(error.message||'未知錯誤'));setLoading(button,false);return;}
-    const people=list(data);let moved=0,failed=0,notFound=0;
+    const people=list(data);let moved=0,alreadyPublic=0,failed=0,notFound=0;const failures=[];
     for(const person of people){
       try{
         const oldPhoto=await state.sb.storage.from('p139-private').download(person.photo_path);
-        if(oldPhoto.error){if(oldPhoto.error.statusCode==='404'||/not found|object not found/i.test(oldPhoto.error.message||'')){notFound++;continue;}throw oldPhoto.error;}
+        if(oldPhoto.error){if(oldPhoto.error.statusCode==='404'||/not found|object not found/i.test(oldPhoto.error.message||'')){
+          const publicPhoto=await state.sb.storage.from('p139-public').download(person.photo_path);
+          if(!publicPhoto.error){alreadyPublic++;continue;}
+          if(publicPhoto.error.statusCode==='404'||/not found|object not found/i.test(publicPhoto.error.message||'')){notFound++;continue;}
+          throw new Error('舊空間找不到；公開空間檢查：'+(publicPhoto.error.message||publicPhoto.error.statusCode||'未知錯誤'));
+        }throw new Error('舊照片讀取：'+(oldPhoto.error.message||oldPhoto.error.statusCode||'未知錯誤'));}
         const copied=await state.sb.storage.from('p139-public').upload(person.photo_path,oldPhoto.data,{contentType:'image/jpeg',upsert:true,cacheControl:'3600'});
-        if(copied.error)throw copied.error;moved++;
-      }catch(e){failed++;}
+        if(copied.error)throw new Error('公開空間寫入：'+(copied.error.message||copied.error.statusCode||'未知錯誤'));moved++;
+      }catch(e){failed++;if(failures.length<3)failures.push(person.display_name+'：'+e.message);}
     }
     setLoading(button,false);
-    if(moved){await loadAdminPeople();await loadPublicGroups();setNotice(`舊照片搬移完成：${moved} 張已複製到公開照片空間；${notFound} 張不在舊版私有空間；${failed} 張搬移失敗。原照片未刪除。`);}
-    else if(!failed)setNotice(`沒有找到可搬移的舊版照片（${notFound} 張不在 p139-private）。若照片曾在 V0.2 或 V0.3 新增，它們應已在 p139-public，請檢查群組載入錯誤及 config.js 專案設定。`);
-    else setNotice(`舊照片搬移失敗 ${failed} 張，未找到 ${notFound} 張。請確認已執行 V0.4 SQL、登入帳號具有該群組管理權，以及 Storage 的舊照片讀取權限。`);
+    if(moved)await loadAdminPeople();
+    await loadPublicGroups();
+    if(failed)setNotice(`照片檢查完成：${moved} 張由私有空間複製；${alreadyPublic} 張原已在公開空間；${notFound} 張兩邊都找不到；${failed} 張發生錯誤。${failures.join('；')} 原私有照片未刪除。請確認 config.js 指向原 Supabase 專案。`);
+    else setNotice(`照片檢查完成：${moved} 張由私有空間複製；${alreadyPublic} 張原已在公開空間；${notFound} 張在 p139-private 與 p139-public 都找不到。原私有照片未刪除。若公開照片仍未顯示，請確認 config.js 指向原 Supabase 專案，並確認 p139-public bucket 設為 public。`);
   }
 
   init();
