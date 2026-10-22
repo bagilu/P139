@@ -13,3 +13,5 @@
 .carnegie-banner>span{display:grid;gap:4px;line-height:1.55}
 .carnegie-banner>span span[lang="en"]{font-family:Inter,Arial,sans-serif;font-size:.95em}
 @media(max-width:650px){.brand-copy h1 span[lang="en"]{display:block;margin:2px 0 0;font-size:.66em}.subtitle span[lang="en"]{display:block;margin:3px 0 0}}
+.legacy-photo-tools{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:0 0 20px;padding:15px 17px;border:1px solid #ead9b5;border-radius:15px;background:#fffaf0}.legacy-photo-tools strong{display:block;color:#5d4b2d;margin-bottom:4px}.legacy-photo-tools .small-note{margin:0;max-width:650px}.legacy-photo-tools .button{flex-shrink:0}
+@media(max-width:650px){.legacy-photo-tools{align-items:stretch;flex-direction:column;gap:10px}}

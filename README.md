@@ -1,4 +1,4 @@
-# P139 認臉記名（Faces & Names）V0.3
+# P139 認臉記名（Faces & Names）V0.4
 
 **認臉記名｜Faces & Names**
 
@@ -6,11 +6,13 @@
 
 用照片練習記住群組成員姓名。玩家免登入；系統管理者登入後建立群組並維護公開學習名單。首頁以中英文呈現 Dale Carnegie 人際互動原則：「記住一個人的名字」／“Remember a person's name.”
 
-## V0.3 更新
+## V0.3 名稱與首頁更新
 
-- 正式名稱更新為「認臉記名｜Faces & Names」。
-- 首頁主標語以較大字級呈現中英文：「記住一個人的名字」／“Remember a person's name.”
-- 頁首、頁尾、文件與版本號同步更新。
+## V0.4 修正
+
+- 群組載入失敗時顯示 Supabase 錯誤訊息與錯誤代碼，並提示可能需要重新執行 SQL。
+- 加入管理者專用「搬移本群組舊照片」功能，透過 Supabase Storage API 將 V0.1 私有照片複製到公開 bucket；不會刪除舊檔。
+- 資料庫保留僅供群組管理者讀取舊照片的政策，以支援遷移。
 
 ## 本版設計
 
@@ -53,7 +55,7 @@
 2. `Database/02_P139_Functions.sql`
 3. `Database/90_P139_Permissions.sql`
 
-若已依 V0.1 安裝過資料庫，請用本版檔案重新執行這三份 SQL，以新增系統管理者資料表、公開照片 bucket 及免登入練習 RPC。原有人物資料不會刪除；若舊照片已上傳至 `p139-private`，需在管理介面編輯人物並重新上傳照片，才能放入本版公開 bucket。
+若已安裝過先前版本，請用本版檔案重新執行這三份 SQL，以確保公開練習 RPC、權限及照片 bucket 政策更新。原有人物資料不會刪除。若照片仍在 V0.1 的 `p139-private`，請以管理者登入、選取群組，按「搬移本群組舊照片」；只有確認適合公開的群組才執行。檔案會複製至 `p139-public`，原私有檔案保留。V0.2/V0.3 新增的照片本來就在 `p139-public`，不需要搬移。
 
 ### 3. 建立第一個群組與系統管理者
 
@@ -96,3 +98,4 @@ SELECT public.p139_bootstrap_organization('行政主管群組', 'bagilu@gmail.co
 - [x] 個人錯誤紀錄不送到伺服器，只保存在瀏覽器本機。
 - [x] ZIP 僅含 `config-sample.js`，不含實際設定檔、Service Role Key 或人物照片。
 - [x] 提供 P139 permissions 與 health check SQL。
+- [x] 舊版私有照片只允許群組管理者讀取遷移；匿名使用者不能讀取舊私有 bucket。

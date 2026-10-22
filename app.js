@@ -31,13 +31,13 @@
     $('orgSelect').addEventListener('change',()=>{state.org=state.orgs.find(x=>x.id===$('orgSelect').value)||null;loadAdminPeople();});
     $('publicGroupSelect').addEventListener('change',async()=>{state.group=state.groups.find(g=>g.id===$('publicGroupSelect').value)||null;state.people=[];clearQuiz();if(state.group)await loadPublicPeople();renderPersonalStats();});
     $('startPractice').addEventListener('click',startPractice);$('answerForm').addEventListener('submit',submitAnswer);$('nextQuestion').addEventListener('click',nextQuestion);
-    $('clearPersonalData').addEventListener('click',clearPersonalData);$('personPhoto').addEventListener('change',previewPhoto);$('personForm').addEventListener('submit',savePerson);$('cancelPersonEdit').addEventListener('click',resetPersonForm);$('groupForm').addEventListener('submit',createGroup);
+    $('clearPersonalData').addEventListener('click',clearPersonalData);$('migrateLegacyPhotos').addEventListener('click',migrateLegacyPhotos);$('personPhoto').addEventListener('change',previewPhoto);$('personForm').addEventListener('submit',savePerson);$('cancelPersonEdit').addEventListener('click',resetPersonForm);$('groupForm').addEventListener('submit',createGroup);
   }
 
   async function loadPublicGroups() {
     setNotice('正在載入公開練習群組…');
     const {data,error}=await rpc('p139_public_list_groups');
-    if(error){setNotice('無法載入群組。請確認已依 README 安裝 P139 資料庫。');return;}
+    if(error){const code=error.code?' ['+error.code+']':'';const detail=error.message||'未知 Supabase 錯誤';const needsSql=['PGRST202','42883'].includes(error.code);setNotice((needsSql?'資料庫尚未更新：請依 README 重新執行 01、02、90 三份 P139 SQL。':'無法載入群組：')+detail+code);return;}
     state.groups=list(data);const select=$('publicGroupSelect');
     select.innerHTML=state.groups.map(g=>'<option value="'+escapeHtml(g.id)+'">'+escapeHtml(g.name)+'</option>').join('');
     if(!state.groups.length){select.innerHTML='<option value="">目前沒有可練習的群組</option>';setNotice('目前尚無已公開的人物名單，請由系統管理者建立群組並新增人物。');return;}
@@ -99,6 +99,25 @@
   async function loadAdminPeople(){if(!state.user||!state.org)return;const root=$('adminPeople');root.innerHTML='<p class="muted">載入名單中…</p>';const {data,error}=await rpc('p139_list_people_for_admin',{p_org_id:state.org.id});if(error){root.textContent='無法載入人物名單。';return;}const rows=list(data);root.innerHTML='';rows.forEach(person=>{const row=document.createElement('div');row.className='admin-person';const img=document.createElement('img');img.src=photoUrl(person.photo_path);img.alt='';const name=document.createElement('div');name.className='person-name';name.innerHTML=escapeHtml(person.display_name)+'<div class="small-note">'+priorityLabels[person.recognition_priority]+' · '+(person.is_active?'使用中':'已停用')+(person.aliases&&person.aliases.length?' · 別名：'+escapeHtml(person.aliases.join('、')):'')+'</div>';const actions=document.createElement('div');actions.className='admin-actions';const edit=document.createElement('button');edit.className='button quiet';edit.type='button';edit.textContent='編輯';edit.addEventListener('click',()=>editPerson(person));const active=document.createElement('button');active.className='button secondary';active.type='button';active.textContent=person.is_active?'停用':'啟用';active.addEventListener('click',()=>togglePerson(person));actions.append(edit,active);row.append(img,name,actions);root.appendChild(row);});if(!rows.length)root.innerHTML='<p class="muted">此群組尚未建立人物資料。</p>';}
   function editPerson(person){$('personId').value=person.id;$('personName').value=person.display_name;$('personAliases').value=(person.aliases||[]).join('\n');$('personPriority').value=String(person.recognition_priority||2);state.editingPhotoPath=person.photo_path;state.pendingPhoto=null;$('photoPreviewWrap').classList.remove('hidden');$('compressionStatus').textContent='若不選新照片，將保留原照片。';$('photoPreview').src=photoUrl(person.photo_path);$('cancelPersonEdit').classList.remove('hidden');$('savePerson').textContent='儲存修改';$('personName').scrollIntoView({behavior:'smooth',block:'center'});}
   async function togglePerson(person){const {error}=await rpc('p139_set_person_active',{p_person_id:person.id,p_is_active:!person.is_active});if(error){setNotice('更新人物狀態失敗。');return;}await loadAdminPeople();await loadPublicGroups();}
+  async function migrateLegacyPhotos(){
+    if(!state.user||!state.org)return;
+    const button=$('migrateLegacyPhotos');setLoading(button,true,'搬移中…');setNotice('正在檢查此群組的舊版照片…');
+    const {data,error}=await rpc('p139_list_people_for_admin',{p_org_id:state.org.id});
+    if(error){setNotice('無法讀取群組名單：'+(error.message||'未知錯誤'));setLoading(button,false);return;}
+    const people=list(data);let moved=0,failed=0,notFound=0;
+    for(const person of people){
+      try{
+        const oldPhoto=await state.sb.storage.from('p139-private').download(person.photo_path);
+        if(oldPhoto.error){if(oldPhoto.error.statusCode==='404'||/not found|object not found/i.test(oldPhoto.error.message||'')){notFound++;continue;}throw oldPhoto.error;}
+        const copied=await state.sb.storage.from('p139-public').upload(person.photo_path,oldPhoto.data,{contentType:'image/jpeg',upsert:true,cacheControl:'3600'});
+        if(copied.error)throw copied.error;moved++;
+      }catch(e){failed++;}
+    }
+    setLoading(button,false);
+    if(moved){await loadAdminPeople();await loadPublicGroups();setNotice(`舊照片搬移完成：${moved} 張已複製到公開照片空間；${notFound} 張不在舊版私有空間；${failed} 張搬移失敗。原照片未刪除。`);}
+    else if(!failed)setNotice(`沒有找到可搬移的舊版照片（${notFound} 張不在 p139-private）。若照片曾在 V0.2 或 V0.3 新增，它們應已在 p139-public，請檢查群組載入錯誤及 config.js 專案設定。`);
+    else setNotice(`舊照片搬移失敗 ${failed} 張，未找到 ${notFound} 張。請確認已執行 V0.4 SQL、登入帳號具有該群組管理權，以及 Storage 的舊照片讀取權限。`);
+  }
 
   init();
 })();

@@ -30,4 +30,6 @@ FROM expected_rpcs r LEFT JOIN pg_proc p ON p.proname=r.name AND p.pronamespace=
 UNION ALL
 SELECT 'PUBLIC PHOTO BUCKET p139-public',CASE WHEN EXISTS(SELECT 1 FROM storage.buckets WHERE id='p139-public' AND public=true) THEN 'PASS' ELSE 'FAIL' END
 UNION ALL
-SELECT 'P139 PHOTO WRITE POLICIES',CASE WHEN (SELECT count(*) FROM pg_policies WHERE schemaname='storage' AND tablename='objects' AND policyname LIKE 'P139 public photo %')=3 THEN 'PASS' ELSE 'FAIL' END;
+SELECT 'P139 PHOTO WRITE POLICIES',CASE WHEN (SELECT count(*) FROM pg_policies WHERE schemaname='storage' AND tablename='objects' AND policyname LIKE 'P139 public photo %')=3 THEN 'PASS' ELSE 'FAIL' END
+UNION ALL
+SELECT 'LEGACY PHOTO MIGRATION READ POLICY',CASE WHEN EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='storage' AND tablename='objects' AND policyname='P139 legacy photo migration read') THEN 'PASS' ELSE 'FAIL' END;

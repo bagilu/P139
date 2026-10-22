@@ -319,6 +319,11 @@ BEGIN
 END;
 $$;
 
+-- Keep the legacy private bucket readable only by group administrators for one-time migration.
+DROP POLICY IF EXISTS "P139 legacy photo migration read" ON storage.objects;
+CREATE POLICY "P139 legacy photo migration read" ON storage.objects FOR SELECT TO authenticated
+USING (bucket_id='p139-private' AND public.p139_can_access_storage((storage.foldername(name))[1],true));
+
 -- Public study photos are readable by anyone; only authorized administrators can edit them.
 DROP POLICY IF EXISTS "P139 private photo read" ON storage.objects;
 DROP POLICY IF EXISTS "P139 private photo insert" ON storage.objects;
