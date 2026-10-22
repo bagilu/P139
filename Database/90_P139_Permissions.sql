@@ -24,6 +24,7 @@ REVOKE ALL ON FUNCTION public.p139_list_people_for_admin(uuid) FROM PUBLIC,anon,
 REVOKE ALL ON FUNCTION public.p139_save_person(uuid,uuid,text,jsonb,text,smallint) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.p139_set_person_active(uuid,uuid,boolean) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.p139_list_available_people(uuid) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.p139_create_person_profile(uuid,text,jsonb,text) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.p139_add_person_to_group(uuid,uuid,smallint) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.p139_remove_person_from_group(uuid,uuid) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.p139_add_member(uuid,text,text) FROM PUBLIC,anon,authenticated;
@@ -40,5 +41,6 @@ GRANT EXECUTE ON FUNCTION public.p139_list_people_for_admin(uuid) TO authenticat
 GRANT EXECUTE ON FUNCTION public.p139_save_person(uuid,uuid,text,jsonb,text,smallint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.p139_set_person_active(uuid,uuid,boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.p139_list_available_people(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.p139_create_person_profile(uuid,text,jsonb,text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.p139_add_person_to_group(uuid,uuid,smallint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.p139_remove_person_from_group(uuid,uuid) TO authenticated;

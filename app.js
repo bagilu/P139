@@ -31,7 +31,7 @@
     $('orgSelect').addEventListener('change',()=>{state.org=state.orgs.find(x=>x.id===$('orgSelect').value)||null;loadAdminPeople();});
     $('publicGroupSelect').addEventListener('change',async()=>{state.group=state.groups.find(g=>g.id===$('publicGroupSelect').value)||null;state.people=[];clearQuiz();if(state.group)await loadPublicPeople();renderPersonalStats();});
     $('startPractice').addEventListener('click',startPractice);$('answerForm').addEventListener('submit',submitAnswer);$('nextQuestion').addEventListener('click',nextQuestion);
-    $('clearPersonalData').addEventListener('click',clearPersonalData);$('migrateLegacyPhotos').addEventListener('click',migrateLegacyPhotos);$('addExistingPerson').addEventListener('click',addExistingPerson);$('personPhoto').addEventListener('change',previewPhoto);$('personForm').addEventListener('submit',savePerson);$('cancelPersonEdit').addEventListener('click',resetPersonForm);$('groupForm').addEventListener('submit',createGroup);
+    $('clearPersonalData').addEventListener('click',clearPersonalData);$('addExistingPerson').addEventListener('click',addExistingPerson);$('personPhoto').addEventListener('change',previewPhoto);$('personForm').addEventListener('submit',savePerson);$('cancelPersonEdit').addEventListener('click',resetPersonForm);$('groupForm').addEventListener('submit',createGroup);
   }
 
   async function loadPublicGroups() {
@@ -109,8 +109,8 @@
   async function compressImage(file){if(!file||!file.type.startsWith('image/'))throw new Error('請選擇圖片檔。');const bitmap=await createImageBitmap(file,{imageOrientation:'from-image'});let scale=Math.min(1,1200/Math.max(bitmap.width,bitmap.height)),width=Math.round(bitmap.width*scale),height=Math.round(bitmap.height*scale),quality=.86,blob=null;for(let i=0;i<18;i++){const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const ctx=canvas.getContext('2d',{alpha:false});ctx.fillStyle='#fff';ctx.fillRect(0,0,width,height);ctx.drawImage(bitmap,0,0,width,height);blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',quality));if(blob&&blob.size<=102400)break;if(quality>.48)quality-=.07;else{width=Math.max(320,Math.round(width*.86));height=Math.max(320,Math.round(height*.86));quality=.76;}}bitmap.close();if(!blob)throw new Error('照片壓縮失敗。');return new File([blob],'portrait.jpg',{type:'image/jpeg',lastModified:Date.now()});}
   async function previewPhoto(){const file=$('personPhoto').files&&$('personPhoto').files[0];if(!file)return;$('compressionStatus').textContent='正在壓縮照片…';$('photoPreviewWrap').classList.remove('hidden');try{state.pendingPhoto=await compressImage(file);$('photoPreview').src=URL.createObjectURL(state.pendingPhoto);$('compressionStatus').textContent='已壓縮至 '+Math.round(state.pendingPhoto.size/1024)+' KB。';}catch(e){state.pendingPhoto=null;$('compressionStatus').textContent=e.message;}}
   async function uploadPhoto(file,path){const {error}=await state.sb.storage.from('p139-public').upload(path,file,{contentType:'image/jpeg',upsert:true,cacheControl:'3600'});if(error)throw new Error('照片上傳失敗：'+error.message);return path;}
-  async function savePerson(event){event.preventDefault();if(!state.user||!state.org)return;const id=$('personId').value||crypto.randomUUID(),name=$('personName').value.trim(),aliases=$('personAliases').value.split(/[\n,，]/).map(x=>x.trim()).filter(Boolean);let photoPath=state.editingPhotoPath||null;const button=$('savePerson');setLoading(button,true,'儲存中…');try{if(state.pendingPhoto){photoPath=state.editingPhotoPath||state.org.id+'/'+id+'.jpg';await uploadPhoto(state.pendingPhoto,photoPath);}if(!photoPath)throw new Error('請上傳人物照片。');const {error}=await rpc('p139_save_person',{p_org_id:state.org.id,p_person_id:id,p_display_name:name,p_aliases:aliases,p_photo_path:photoPath,p_recognition_priority:Number($('personPriority').value)});if(error)throw new Error('人物資料儲存失敗：'+error.message);resetPersonForm();await loadAdminPeople();await loadPublicGroups();setNotice('人物資料已儲存。');}catch(e){setNotice(e.message);}finally{setLoading(button,false);}}
-  function resetPersonForm(){$('personForm').reset();$('personId').value='';state.editingPhotoPath=null;state.pendingPhoto=null;$('photoPreviewWrap').classList.add('hidden');$('cancelPersonEdit').classList.add('hidden');$('savePerson').textContent='新增人物';}
+  async function savePerson(event){event.preventDefault();if(!state.user||!state.org)return;const existingId=$('personId').value,id=existingId||crypto.randomUUID(),name=$('personName').value.trim(),aliases=$('personAliases').value.split(/[\n,，]/).map(x=>x.trim()).filter(Boolean);let photoPath=state.editingPhotoPath||null;const button=$('savePerson');setLoading(button,true,existingId?'儲存中…':'建立中…');try{if(state.pendingPhoto){photoPath=state.editingPhotoPath||(id+'/'+id+'.jpg');await uploadPhoto(state.pendingPhoto,photoPath);}if(!photoPath)throw new Error('請上傳人物照片。');let result;if(existingId){result=await rpc('p139_save_person',{p_org_id:state.org.id,p_person_id:id,p_display_name:name,p_aliases:aliases,p_photo_path:photoPath,p_recognition_priority:Number($('personPriority').value)});}else{result=await rpc('p139_create_person_profile',{p_person_id:id,p_display_name:name,p_aliases:aliases,p_photo_path:photoPath});}if(result.error)throw new Error((existingId?'人物資料儲存':'建立人物資料')+'失敗：'+result.error.message);resetPersonForm();await loadAdminPeople();await loadPublicGroups();setNotice(existingId?'人物資料已更新。':'人物資料已建立；請在「加入目前群組」選擇此人並設定群組優先級。');}catch(e){setNotice(e.message);}finally{setLoading(button,false);}}
+  function resetPersonForm(){$('personForm').reset();$('personId').value='';state.editingPhotoPath=null;state.pendingPhoto=null;$('photoPreviewWrap').classList.add('hidden');$('cancelPersonEdit').classList.add('hidden');$('personPriorityField').classList.add('hidden');$('savePerson').textContent='建立人物資料';}
   async function loadAdminPeople(){
     if(!state.user||!state.org)return;
     const root=$('adminPeople');root.innerHTML='<p class="muted">載入名單中…</p>';
@@ -124,10 +124,10 @@
       const active=document.createElement('button');active.className='button secondary';active.type='button';active.textContent=person.is_active?'移出群組':'重新加入';active.addEventListener('click',()=>togglePerson(person));
       actions.append(edit,active);row.append(img,name,actions);root.appendChild(row);
     });
-    if(!rows.length)root.innerHTML='<p class="muted">此群組尚未建立人物資料。</p>';
+    if(!rows.length)root.innerHTML='<p class="muted">此群組尚未加入人物。請從上方人物名冊選擇教師加入。</p>';
     await loadAvailablePeople();
   }
-  function editPerson(person){$('personId').value=person.id;$('personName').value=person.display_name;$('personAliases').value=(person.aliases||[]).join('\n');$('personPriority').value=String(person.recognition_priority||2);state.editingPhotoPath=person.photo_path;state.pendingPhoto=null;$('photoPreviewWrap').classList.remove('hidden');$('compressionStatus').textContent='若不選新照片，將保留原照片。';$('photoPreview').src=photoUrl(person.photo_path);$('cancelPersonEdit').classList.remove('hidden');$('savePerson').textContent='儲存修改';$('personName').scrollIntoView({behavior:'smooth',block:'center'});}
+  function editPerson(person){$('personId').value=person.id;$('personName').value=person.display_name;$('personAliases').value=(person.aliases||[]).join('\n');$('personPriority').value=String(person.recognition_priority||2);$('personPriorityField').classList.remove('hidden');state.editingPhotoPath=person.photo_path;state.pendingPhoto=null;$('photoPreviewWrap').classList.remove('hidden');$('compressionStatus').textContent='若不選新照片，將保留原照片。';$('photoPreview').src=photoUrl(person.photo_path);$('cancelPersonEdit').classList.remove('hidden');$('savePerson').textContent='儲存人物資料';$('personName').scrollIntoView({behavior:'smooth',block:'center'});}
   async function togglePerson(person){
     const {error}=await rpc('p139_set_person_active',{p_org_id:state.org.id,p_person_id:person.id,p_is_active:!person.is_active});
     if(error){setNotice('更新群組人物狀態失敗：'+error.message);return;}await loadAdminPeople();await loadPublicGroups();
@@ -146,32 +146,6 @@
     const {error}=await rpc('p139_add_person_to_group',{p_org_id:state.org.id,p_person_id:personId,p_recognition_priority:Number($('availablePersonPriority').value)});
     setLoading(button,false);if(error){setNotice('加入既有教師失敗：'+error.message);return;}
     await loadAdminPeople();await loadPublicGroups();setNotice('教師已加入此群組；人物資料與照片仍由同一份共用檔案管理。');
-  }
-
-  async function migrateLegacyPhotos(){
-    if(!state.user||!state.org)return;
-    const button=$('migrateLegacyPhotos');setLoading(button,true,'搬移中…');setNotice('正在檢查此群組的舊版照片…');
-    const {data,error}=await rpc('p139_list_people_for_admin',{p_org_id:state.org.id});
-    if(error){setNotice('無法讀取群組名單：'+(error.message||'未知錯誤'));setLoading(button,false);return;}
-    const people=list(data);let moved=0,alreadyPublic=0,failed=0,notFound=0;const failures=[];
-    for(const person of people){
-      try{
-        const oldPhoto=await state.sb.storage.from('p139-private').download(person.photo_path);
-        if(oldPhoto.error){if(oldPhoto.error.statusCode==='404'||/not found|object not found/i.test(oldPhoto.error.message||'')){
-          const publicPhoto=await state.sb.storage.from('p139-public').download(person.photo_path);
-          if(!publicPhoto.error){alreadyPublic++;continue;}
-          if(publicPhoto.error.statusCode==='404'||/not found|object not found/i.test(publicPhoto.error.message||'')){notFound++;continue;}
-          throw new Error('舊空間找不到；公開空間檢查：'+(publicPhoto.error.message||publicPhoto.error.statusCode||'未知錯誤'));
-        }throw new Error('舊照片讀取：'+(oldPhoto.error.message||oldPhoto.error.statusCode||'未知錯誤'));}
-        const copied=await state.sb.storage.from('p139-public').upload(person.photo_path,oldPhoto.data,{contentType:'image/jpeg',upsert:true,cacheControl:'3600'});
-        if(copied.error)throw new Error('公開空間寫入：'+(copied.error.message||copied.error.statusCode||'未知錯誤'));moved++;
-      }catch(e){failed++;if(failures.length<3)failures.push(person.display_name+'：'+e.message);}
-    }
-    setLoading(button,false);
-    if(moved)await loadAdminPeople();
-    await loadPublicGroups();
-    if(failed)setNotice(`照片檢查完成：${moved} 張由私有空間複製；${alreadyPublic} 張原已在公開空間；${notFound} 張兩邊都找不到；${failed} 張發生錯誤。${failures.join('；')} 原私有照片未刪除。請確認 config.js 指向原 Supabase 專案。`);
-    else setNotice(`照片檢查完成：${moved} 張由私有空間複製；${alreadyPublic} 張原已在公開空間；${notFound} 張在 p139-private 與 p139-public 都找不到。原私有照片未刪除。若公開照片仍未顯示，請確認 config.js 指向原 Supabase 專案，並確認 p139-public bucket 設為 public。`);
   }
 
   init();

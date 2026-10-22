@@ -397,10 +397,30 @@ AS $$
 BEGIN
   IF NOT public.p139_is_system_admin() OR NOT EXISTS(SELECT 1 FROM public."TblP139Organization" WHERE id=p_org_id AND is_active) THEN RAISE EXCEPTION 'system administrator required'; END IF;
   RETURN COALESCE((
-    SELECT jsonb_agg(jsonb_build_object('id',p.id,'display_name',p.display_name,'photo_path',p.photo_path,'source_group',o.name) ORDER BY p.display_name,o.name)
-    FROM public."TblP139Person" p JOIN public."TblP139Organization" o ON o.id=p.organization_id
+    SELECT jsonb_agg(jsonb_build_object('id',p.id,'display_name',p.display_name,'photo_path',p.photo_path,'source_group',COALESCE(o.name,'尚未加入群組')) ORDER BY p.display_name)
+    FROM public."TblP139Person" p LEFT JOIN public."TblP139Organization" o ON o.id=p.organization_id
     WHERE NOT EXISTS(SELECT 1 FROM public."TblP139GroupPerson" gp WHERE gp.organization_id=p_org_id AND gp.person_id=p.id AND gp.is_active)
   ),'[]'::jsonb);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_create_person_profile(p_person_id uuid,p_display_name text,p_aliases jsonb,p_photo_path text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $$
+DECLARE v_alias text;
+BEGIN
+  IF NOT public.p139_is_system_admin() THEN RAISE EXCEPTION 'system administrator required'; END IF;
+  IF p_person_id IS NULL OR length(btrim(COALESCE(p_display_name,''))) NOT BETWEEN 1 AND 120 THEN RAISE EXCEPTION 'invalid person data'; END IF;
+  IF p_photo_path<>p_person_id::text||'/'||p_person_id::text||'.jpg' THEN RAISE EXCEPTION 'invalid photo path'; END IF;
+  IF jsonb_typeof(COALESCE(p_aliases,'[]'::jsonb))<>'array' THEN RAISE EXCEPTION 'aliases must be a list'; END IF;
+  INSERT INTO public."TblP139Person"(id,organization_id,display_name,photo_path,recognition_priority,is_active,updated_at)
+  VALUES(p_person_id,NULL,btrim(p_display_name),p_photo_path,2,true,now());
+  FOR v_alias IN SELECT btrim(value) FROM jsonb_array_elements_text(COALESCE(p_aliases,'[]'::jsonb)) AS t(value) LOOP
+    IF v_alias<>'' AND lower(regexp_replace(v_alias,'\s+','','g'))<>lower(regexp_replace(btrim(p_display_name),'\s+','','g')) THEN
+      INSERT INTO public."TblP139Alias"(person_id,alias) VALUES(p_person_id,v_alias) ON CONFLICT(person_id,alias) DO NOTHING;
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('ok',true,'person_id',p_person_id);
 END;
 $$;
 
@@ -411,6 +431,11 @@ BEGIN
   IF NOT public.p139_is_system_admin() THEN RAISE EXCEPTION 'system administrator required'; END IF;
   IF p_recognition_priority NOT BETWEEN 1 AND 3 OR NOT EXISTS(SELECT 1 FROM public."TblP139Person" WHERE id=p_person_id)
     OR NOT EXISTS(SELECT 1 FROM public."TblP139Organization" WHERE id=p_org_id AND is_active) THEN RAISE EXCEPTION 'invalid group or person'; END IF;
+  IF EXISTS(SELECT 1 FROM public."TblP139GroupPerson" gp JOIN public."TblP139Person" p ON p.id=gp.person_id
+    WHERE gp.organization_id=p_org_id AND gp.is_active AND lower(regexp_replace(p.display_name,'\s+','','g'))=
+      (SELECT lower(regexp_replace(display_name,'\s+','','g')) FROM public."TblP139Person" WHERE id=p_person_id) AND gp.person_id<>p_person_id) THEN
+    RAISE EXCEPTION 'duplicate name in group';
+  END IF;
   INSERT INTO public."TblP139GroupPerson"(organization_id,person_id,recognition_priority,is_active)
   VALUES(p_org_id,p_person_id,p_recognition_priority,true)
   ON CONFLICT(organization_id,person_id) DO UPDATE SET recognition_priority=EXCLUDED.recognition_priority,is_active=true;
@@ -454,10 +479,11 @@ BEGIN
       AND lower(regexp_replace(p.display_name,'\s+','','g'))=lower(regexp_replace(btrim(p_display_name),'\s+','','g'))
   ) THEN RAISE EXCEPTION 'duplicate name in group'; END IF;
   SELECT organization_id,photo_path INTO v_primary_org,v_primary_photo FROM public."TblP139Person" WHERE id=p_person_id;
-  IF v_primary_org IS NULL THEN
-    IF p_photo_path<>p_org_id::text||'/'||p_person_id::text||'.jpg' THEN RAISE EXCEPTION 'invalid photo path'; END IF;
-    INSERT INTO public."TblP139Person"(id,organization_id,display_name,photo_path,recognition_priority,is_active,updated_at)
-    VALUES(p_person_id,p_org_id,btrim(p_display_name),p_photo_path,p_recognition_priority,true,now());
+  IF NOT FOUND THEN RAISE EXCEPTION 'person profile not found; create it in the person directory first';
+  ELSIF v_primary_org IS NULL THEN
+    IF NOT public.p139_is_system_admin() THEN RAISE EXCEPTION 'system administrator required to edit a shared profile'; END IF;
+    IF p_photo_path<>p_person_id::text||'/'||p_person_id::text||'.jpg' THEN RAISE EXCEPTION 'invalid photo path'; END IF;
+    UPDATE public."TblP139Person" SET display_name=btrim(p_display_name),photo_path=p_photo_path,is_active=true,updated_at=now() WHERE id=p_person_id;
   ELSE
     IF p_photo_path<>v_primary_org::text||'/'||p_person_id::text||'.jpg' THEN RAISE EXCEPTION 'invalid photo path'; END IF;
     IF v_primary_org<>p_org_id AND NOT public.p139_is_system_admin() THEN RAISE EXCEPTION 'system administrator required to edit a shared profile'; END IF;
@@ -483,10 +509,8 @@ BEGIN
 END;
 $$;
 
--- Keep the legacy private bucket readable only by group administrators for one-time migration.
+-- V0.7 removes old-photo migration. Keep the old bucket inaccessible through P139 policies.
 DROP POLICY IF EXISTS "P139 legacy photo migration read" ON storage.objects;
-CREATE POLICY "P139 legacy photo migration read" ON storage.objects FOR SELECT TO authenticated
-USING (bucket_id='p139-private' AND public.p139_can_access_storage((storage.foldername(name))[1],true));
 
 -- Public study photos are readable by anyone; only authorized administrators can edit them.
 DROP POLICY IF EXISTS "P139 private photo read" ON storage.objects;

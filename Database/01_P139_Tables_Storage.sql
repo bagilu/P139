@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS public."TblP139Organization" (
 );
 
 CREATE TABLE IF NOT EXISTS public."TblP139Membership" (
-  organization_id uuid NOT NULL REFERENCES public."TblP139Organization"(id) ON DELETE CASCADE,
+  organization_id uuid REFERENCES public."TblP139Organization"(id) ON DELETE SET NULL,
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('admin','participant')),
   is_active boolean NOT NULL DEFAULT true,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public."TblP139SystemAdmin" (
 
 CREATE TABLE IF NOT EXISTS public."TblP139Person" (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id uuid NOT NULL REFERENCES public."TblP139Organization"(id) ON DELETE CASCADE,
+  organization_id uuid REFERENCES public."TblP139Organization"(id) ON DELETE SET NULL,
   display_name text NOT NULL CHECK (length(btrim(display_name)) BETWEEN 1 AND 120),
   recognition_priority smallint NOT NULL DEFAULT 2 CHECK (recognition_priority BETWEEN 1 AND 3),
   photo_path text NOT NULL,
@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS public."TblP139Person" (
 ALTER TABLE public."TblP139Person"
   ADD COLUMN IF NOT EXISTS recognition_priority smallint NOT NULL DEFAULT 2
   CHECK (recognition_priority BETWEEN 1 AND 3);
+ALTER TABLE public."TblP139Person" ALTER COLUMN organization_id DROP NOT NULL;
+ALTER TABLE public."TblP139Person" DROP CONSTRAINT IF EXISTS "TblP139Person_organization_id_fkey";
+ALTER TABLE public."TblP139Person" ADD CONSTRAINT "TblP139Person_organization_id_fkey"
+  FOREIGN KEY (organization_id) REFERENCES public."TblP139Organization"(id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS public."TblP139GroupPerson" (
   organization_id uuid NOT NULL REFERENCES public."TblP139Organization"(id) ON DELETE CASCADE,
@@ -47,9 +51,10 @@ CREATE TABLE IF NOT EXISTS public."TblP139GroupPerson" (
   PRIMARY KEY (organization_id,person_id)
 );
 
--- Upgrade existing records: every person keeps their original group association and priority.
+-- Upgrade existing records: seed group links from legacy person rows when an origin group exists.
 INSERT INTO public."TblP139GroupPerson"(organization_id,person_id,recognition_priority,is_active)
 SELECT organization_id,id,recognition_priority,is_active FROM public."TblP139Person"
+WHERE organization_id IS NOT NULL
 ON CONFLICT (organization_id,person_id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS public."TblP139Alias" (
@@ -123,6 +128,7 @@ DROP POLICY IF EXISTS "P139 private photo read" ON storage.objects;
 DROP POLICY IF EXISTS "P139 private photo insert" ON storage.objects;
 DROP POLICY IF EXISTS "P139 private photo update" ON storage.objects;
 DROP POLICY IF EXISTS "P139 private photo delete" ON storage.objects;
+DROP POLICY IF EXISTS "P139 legacy photo migration read" ON storage.objects;
 DROP POLICY IF EXISTS "P139 public photo insert" ON storage.objects;
 DROP POLICY IF EXISTS "P139 public photo update" ON storage.objects;
 DROP POLICY IF EXISTS "P139 public photo delete" ON storage.objects;

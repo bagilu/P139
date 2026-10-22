@@ -4,7 +4,7 @@ WITH expected_tables(name) AS (
 ), expected_rpcs(name,anonymous_access) AS (
   VALUES ('p139_public_list_groups',true),('p139_public_list_people',true),('p139_public_check_answer',true),('p139_list_available_people',false),('p139_add_person_to_group',false),('p139_remove_person_from_group',false),
          ('p139_is_system_admin',false),('p139_create_group',false),('p139_list_my_organizations',false),
-         ('p139_list_people_for_admin',false),('p139_save_person',false),('p139_set_person_active',false),('p139_can_access_storage',false)
+         ('p139_list_people_for_admin',false),('p139_save_person',false),('p139_create_person_profile',false),('p139_set_person_active',false),('p139_can_access_storage',false)
 )
 SELECT 'TABLE RLS: '||t.name AS check_item,
        CASE WHEN c.oid IS NOT NULL AND c.relrowsecurity THEN 'PASS' ELSE 'FAIL' END AS result
@@ -32,4 +32,4 @@ SELECT 'PUBLIC PHOTO BUCKET p139-public',CASE WHEN EXISTS(SELECT 1 FROM storage.
 UNION ALL
 SELECT 'P139 PHOTO WRITE POLICIES',CASE WHEN (SELECT count(*) FROM pg_policies WHERE schemaname='storage' AND tablename='objects' AND policyname LIKE 'P139 public photo %')=3 THEN 'PASS' ELSE 'FAIL' END
 UNION ALL
-SELECT 'LEGACY PHOTO MIGRATION READ POLICY',CASE WHEN EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='storage' AND tablename='objects' AND policyname='P139 legacy photo migration read') THEN 'PASS' ELSE 'FAIL' END;
+SELECT 'LEGACY PHOTO MIGRATION POLICY REMOVED',CASE WHEN NOT EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='storage' AND tablename='objects' AND policyname='P139 legacy photo migration read') THEN 'PASS' ELSE 'FAIL' END;
