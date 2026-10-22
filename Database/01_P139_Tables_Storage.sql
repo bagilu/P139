@@ -17,16 +17,26 @@ CREATE TABLE IF NOT EXISTS public."TblP139Membership" (
   PRIMARY KEY (organization_id,user_id)
 );
 
+CREATE TABLE IF NOT EXISTS public."TblP139SystemAdmin" (
+  user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS public."TblP139Person" (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL REFERENCES public."TblP139Organization"(id) ON DELETE CASCADE,
   display_name text NOT NULL CHECK (length(btrim(display_name)) BETWEEN 1 AND 120),
+  recognition_priority smallint NOT NULL DEFAULT 2 CHECK (recognition_priority BETWEEN 1 AND 3),
   photo_path text NOT NULL,
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (organization_id,id)
 );
+
+ALTER TABLE public."TblP139Person"
+  ADD COLUMN IF NOT EXISTS recognition_priority smallint NOT NULL DEFAULT 2
+  CHECK (recognition_priority BETWEEN 1 AND 3);
 
 CREATE TABLE IF NOT EXISTS public."TblP139Alias" (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -62,6 +72,7 @@ CREATE INDEX IF NOT EXISTS "IX_P139Answer_User_Person_Time" ON public."TblP139An
 
 ALTER TABLE public."TblP139Organization" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139Membership" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."TblP139SystemAdmin" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139Person" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139Alias" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."TblP139UserPriority" ENABLE ROW LEVEL SECURITY;
@@ -72,6 +83,8 @@ DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139Organization";
 CREATE POLICY "P139 no direct access" ON public."TblP139Organization" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);
 DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139Membership";
 CREATE POLICY "P139 no direct access" ON public."TblP139Membership" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);
+DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139SystemAdmin";
+CREATE POLICY "P139 no direct access" ON public."TblP139SystemAdmin" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);
 DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139Person";
 CREATE POLICY "P139 no direct access" ON public."TblP139Person" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);
 DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139Alias";
@@ -81,15 +94,18 @@ CREATE POLICY "P139 no direct access" ON public."TblP139UserPriority" FOR ALL TO
 DROP POLICY IF EXISTS "P139 no direct access" ON public."TblP139AnswerEvent";
 CREATE POLICY "P139 no direct access" ON public."TblP139AnswerEvent" FOR ALL TO anon,authenticated USING (false) WITH CHECK (false);
 
--- Private bucket dedicated to P139 portraits. Binary uploads use Supabase Storage's API;
+-- Public bucket dedicated to intentionally public P139 learning portraits. Binary uploads use Storage's API;
 -- all relational data changes remain behind P139 RPCs.
 INSERT INTO storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
-VALUES ('p139-private','p139-private',false,1048576,ARRAY['image/jpeg']::text[])
-ON CONFLICT (id) DO UPDATE SET public=false,file_size_limit=1048576,allowed_mime_types=ARRAY['image/jpeg']::text[];
+VALUES ('p139-public','p139-public',true,1048576,ARRAY['image/jpeg']::text[])
+ON CONFLICT (id) DO UPDATE SET public=true,file_size_limit=1048576,allowed_mime_types=ARRAY['image/jpeg']::text[];
 
 DROP POLICY IF EXISTS "P139 private photo read" ON storage.objects;
 DROP POLICY IF EXISTS "P139 private photo insert" ON storage.objects;
 DROP POLICY IF EXISTS "P139 private photo update" ON storage.objects;
 DROP POLICY IF EXISTS "P139 private photo delete" ON storage.objects;
+DROP POLICY IF EXISTS "P139 public photo insert" ON storage.objects;
+DROP POLICY IF EXISTS "P139 public photo update" ON storage.objects;
+DROP POLICY IF EXISTS "P139 public photo delete" ON storage.objects;
 
 -- Policies are created after the P139 storage authorization helper in 02_P139_Functions.sql.

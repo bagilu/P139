@@ -1,96 +1,98 @@
-# P139 新人的考驗 V0.1
+# P139 認臉記名（Faces & Names）V0.3
 
-以照片練習記住團體成員姓名的封閉式網頁遊戲。V0.1 提供登入、團體授權、人物與別名管理、照片自動壓縮、個人熟悉優先級、隨機循環問答及個人錯誤回饋。
+**認臉記名｜Faces & Names**
+
+看見面孔，記住名字。*Recognize faces. Remember names.*
+
+用照片練習記住群組成員姓名。玩家免登入；系統管理者登入後建立群組並維護公開學習名單。首頁以中英文呈現 Dale Carnegie 人際互動原則：「記住一個人的名字」／“Remember a person's name.”
+
+## V0.3 更新
+
+- 正式名稱更新為「認臉記名｜Faces & Names」。
+- 首頁主標語以較大字級呈現中英文：「記住一個人的名字」／“Remember a person's name.”
+- 頁首、頁尾、文件與版本號同步更新。
+
+## 本版設計
+
+- 公開練習：玩家免登入選擇群組及認識優先級，系統隨機循環出題。
+- 管理者專用：`bagilu@gmail.com` 為第一位系統管理者；登入後可建立群組，管理姓名、別名、照片及認識優先級。
+- 公開資料：此版本的群組、姓名、別名和照片都供公開學習使用。請只加入適合公開使用的人物資料及照片。
+- 個人紀錄：練習次數和錯誤答案存在玩家自己的瀏覽器 `localStorage`，不會上傳到 Supabase。清除瀏覽器資料或使用不同裝置時，紀錄不會保留。
+- 照片：瀏覽器先縮小至最長邊 1200 px，壓縮目標約 100 KB，存入公開讀取的 `p139-public` bucket。
+- 群組範例：行政主管群組、各系教師群組。每個群組有自己的名單。
+- 本版不含學生班級私密群組。未來若納入學生照片，需增加私人群組、成員授權及私有照片存取控制，不能直接使用本版公開群組。
 
 ## 安全與資料原則
 
-- 遵循 SBI-P-SDS v3.3：RLS Always On → No Direct Table Access → RPC Only → Least Data → Least Privilege。
-- P139 使用 P130 共用帳號；P139 保留自己的登入頁，不提供註冊、忘記密碼或密碼修改功能。
-- P139 管理團體成員與角色。登入成功不代表有權限，必須被加入團體。
-- 六張 P139 資料表均啟用 RLS，並撤銷 `anon` 與 `authenticated` 的直接資料表權限。前端資料操作只呼叫 P139 RPC。
-- RPC 使用 P139 專屬函式、固定 `search_path`、`auth.uid()` 身分確認及團體角色檢查。具 `SECURITY DEFINER` 的函式只授予必要角色執行權。
-- 照片放在非公開 `p139-private` Storage bucket。瀏覽器上傳的是先壓縮後的 JPEG；Storage policy 限定已授權成員讀取、管理者上傳或更換照片。
-- 每位使用者只能修改與查看自己的優先級及答題錯誤回饋。一般使用者不會取得其他人的錯誤紀錄。
+- 遵循 SBI-P-SDS v3.4：RLS Always On → No Direct Table Access → RPC Only → Least Data → Least Privilege。
+- 玩家使用 anon key 呼叫三個唯讀／答案比對 RPC；`anon` 無法直接讀寫任何 P139 資料表，也不能上傳、更換或刪除照片。
+- 管理者使用 P130 共用帳號。只有 `TblP139SystemAdmin` 中的系統管理者能建立群組；群組管理 RPC 另檢查管理者資格。
+- 關係資料表皆啟用 RLS，前端資料庫操作使用 P139 RPC。照片設為公開讀取是本版明確的產品設定，照片修改仍須管理者登入。
 - ZIP 不含 `config.js`、Service Role Key 或真實照片。
 
 ## ZIP 內容
 
-- `index.html`, `styles.css`, `app.js`：無建置步驟的前端。
+- `index.html`, `styles.css`, `app.js`：公開練習介面與管理者介面。
 - `config-sample.js`：Supabase URL、anon/publishable key 與 P130 網址範本。
-- `Database/01_P139_Tables_Storage.sql`：P139 資料表、RLS 與私有照片 bucket。
-- `Database/02_P139_Functions.sql`：P139 RPC 與 Storage 權限檢查。
-- `Database/90_P139_Permissions.sql`：撤銷直接資料表存取並逐一授予 RPC 執行權。
-- `Database/99_P139_HealthCheck.sql`：交付前權限與物件檢查。
+- `Database/01_P139_Tables_Storage.sql`：P139 資料表、RLS 與公開照片 bucket。
+- `Database/02_P139_Functions.sql`：公開練習 RPC、管理 RPC 與照片授權檢查。
+- `Database/90_P139_Permissions.sql`：撤銷資料表直接權限並設定逐一 RPC 權限。
+- `Database/99_P139_HealthCheck.sql`：交付權限檢查。
 
 ## 安裝順序
 
-### 1. 建立 P130 帳號
+### 1. 建立管理者帳號
 
-管理者與預計使用者先依機構流程在 P130 建立帳號並完成 Email 驗證。P139 不含註冊或密碼維護功能。
+請先在 P130 註冊 `bagilu@gmail.com` 並完成 Email 驗證。管理者帳號只用於維護群組及名單；一般玩家不需註冊或登入。
 
 ### 2. 安裝資料庫
 
-在共用 Supabase Project 的 SQL Editor 依序貼上並執行：
+在共用 Supabase Project 的 SQL Editor 依序執行：
 
 1. `Database/01_P139_Tables_Storage.sql`
 2. `Database/02_P139_Functions.sql`
 3. `Database/90_P139_Permissions.sql`
 
-這些檔案僅建立或調整 P139 命名的物件及 `p139-private` bucket；不變更其他 P 專案的資料表或全域權限。
+若已依 V0.1 安裝過資料庫，請用本版檔案重新執行這三份 SQL，以新增系統管理者資料表、公開照片 bucket 及免登入練習 RPC。原有人物資料不會刪除；若舊照片已上傳至 `p139-private`，需在管理介面編輯人物並重新上傳照片，才能放入本版公開 bucket。
 
-### 3. 建立第一個團體與管理者
+### 3. 建立第一個群組與系統管理者
 
-在 SQL Editor 執行以下呼叫，將名稱與 Email 換成實際資料。Email 必須已在 P130 註冊。呼叫由資料庫管理者在 SQL Editor 執行，不會開放給網站使用者。
+在 Supabase SQL Editor 執行以下指令。它會建立「行政主管群組」，並指定 `bagilu@gmail.com` 為系統管理者和該群組管理者：
 
 ```sql
-SELECT public.p139_bootstrap_organization('慈濟大學經營管理學系', 'admin@example.com');
+SELECT public.p139_bootstrap_organization('行政主管群組', 'bagilu@gmail.com');
 ```
 
-回傳的 `organization_id` 可留存作為管理紀錄。第一位管理者之後可在 P139「成員管理」加入已註冊的使用者，並指定一般成員或管理者角色。
+此初始化只能執行一次。若 V0.1 已建立群組，且 `bagilu@gmail.com` 已是該群組管理者，這個呼叫會把該帳號升級為系統管理者，不會重複建立群組。成功後，請以 `bagilu@gmail.com` 的 P130 帳號登入 P139 管理區，再建立「各系教師群組」等其他群組。管理者會自動取得新群組的管理權限。
 
 ### 4. 檢查資料庫
 
-執行 `Database/99_P139_HealthCheck.sql`。每一列都應為 `PASS`。若出現 `FAIL`，先修正權限或缺少的 P139 物件，再部署前端。
+執行 `Database/99_P139_HealthCheck.sql`，每一列都應為 `PASS`。若有 `FAIL`，先檢查資料表、RPC 權限與 `p139-public` bucket 設定。
 
-### 5. 設定前端
+### 5. 設定網站
 
-1. 將 `config-sample.js` 複製成 `config.js`。
-2. 填入 Supabase Project URL 和 anon/publishable key，以及 P130 Account Center 網址。
-3. `config.js` 只放公開 anon/publishable key；絕不可填入 `service_role` key。
-4. 將資料夾內容部署至靜態網站主機。未登入者只會看到登入頁；尚未加入團體的已登入者看不到人物資料。
+1. 將 `config-sample.js` 複製為 `config.js`。
+2. 填入 Supabase Project URL、anon/publishable key 和 P130 Account Center 網址。
+3. 只能在網站放 anon/publishable key，絕不可放 `service_role` key。
+4. 將資料夾內容部署到靜態網站主機。
 
-P139 使用獨立 `storageKey: P139-auth`，且 V0.1 不持久保存登入 Session；重新載入頁面後需重新登入。
+## 使用方式
 
-## 操作方式
+### 玩家
 
-### 管理者
+開啟網站後選擇群組和認識優先級即可開始。每輪盡量不重複，完成一輪再洗牌。錯答會顯示正確姓名；如果答成同群組內另一人的姓名，會提示人物混淆。此前錯誤及答題統計保留在同一瀏覽器的本機資料。
 
-登入後選擇團體，在「人物管理」輸入姓名與別名並上傳照片。瀏覽器會先將照片縮小至最長邊不超過 1200 px，再調整 JPEG 品質與尺寸，目標為 100 KB 以下；照片細節優先保留，個別圖片可能因內容差異略高於目標。上傳後可編輯資料或停用人物。
+### 系統管理者
 
-在「成員管理」輸入已註冊的 Email，將其加入目前團體。V0.1 不提供公開加入或自助註冊。
+點選「系統管理者入口」並登入。系統管理者可新增群組；選擇群組後可新增、編輯或停用人物，設定姓名、別名、照片與認識優先級。照片及名單會公開給所有玩家練習。
 
-### 一般成員
+## SBI-P-SDS v3.4 交付檢查
 
-在「我的優先級」為想熟悉的人物設定「最想熟悉」、「正在熟悉」或「之後再熟悉」。開始練習後，系統在該級別內隨機排列人物，完成一輪後重新洗牌，並盡量避免輪次交界連續出現相同人物。
-
-玩家輸入姓名或管理者設定的別名。答錯時，系統顯示正確姓名、過去三筆個人錯誤答案；若答案符合名單內另一人的姓名或別名，另外提示人物混淆。答題資料保留在 P139，僅回傳給本人。
-
-## V0.1 範圍與限制
-
-- V0.1 為單一團體可運作的第一版骨架；管理者需由 SQL Editor 建立第一個團體，後續團體建立介面暫不提供。
-- 人物資料採逐筆管理，尚未提供 Excel/CSV 批次匯入。
-- 出題採自由回憶填答，不提供選擇題、排行榜或跨團體比較。
-- 照片壓縮在瀏覽器完成；建議管理者使用清楚、適合辨識的正面照片。
-
-## P-SDS v3.3 交付檢查
-
-- [x] 所有 P139 資料表啟用 RLS。
-- [x] 前端不直接讀寫 P139 資料表。
-- [x] RPC 專案命名並驗證登入身分、團體成員資格與管理角色。
-- [x] `anon` 不可呼叫管理或答題 RPC；`authenticated` 僅能執行列出的 P139 RPC。
-- [x] 函式固定 `search_path`；不使用動態 SQL。
-- [x] 照片 bucket 為 private，Storage policy 使用 P139 專屬命名與團體權限檢查。
-- [x] ZIP 只含 `config-sample.js`，不含 `config.js`、Service Role Key 或使用者照片。
-- [x] SQL 物件、政策、索引、RPC 均有 P139 命名；無 schema-wide GRANT/REVOKE 或 `ALTER DEFAULT PRIVILEGES`。
+- [x] P139 資料表啟用 RLS，前端無直接資料表權限。
+- [x] 公開練習僅能呼叫已列出的公開 RPC；匿名使用者不能執行管理 RPC。
+- [x] 建立群組 RPC 驗證系統管理者資格；人物管理 RPC 驗證群組管理者資格。
+- [x] 函式固定 `search_path`，設定逐函式 `GRANT`／`REVOKE`。
+- [x] 照片公開讀取、管理者登入後才可新增或更新；上傳前瀏覽器端壓縮。
+- [x] 個人錯誤紀錄不送到伺服器，只保存在瀏覽器本機。
+- [x] ZIP 僅含 `config-sample.js`，不含實際設定檔、Service Role Key 或人物照片。
 - [x] 提供 P139 permissions 與 health check SQL。
-

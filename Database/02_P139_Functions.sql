@@ -1,6 +1,30 @@
 -- P139 RPCs. All functions are namespaced and use fixed search_path values.
 -- SECURITY DEFINER is limited to these functions because browser roles receive no table privileges.
 
+CREATE OR REPLACE FUNCTION public.p139_is_system_admin()
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT auth.uid() IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public."TblP139SystemAdmin" WHERE user_id=auth.uid()
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_create_group(p_group_name text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE v_group_id uuid;
+BEGIN
+  IF NOT public.p139_is_system_admin() THEN RAISE EXCEPTION 'system administrator required'; END IF;
+  IF length(btrim(COALESCE(p_group_name,''))) NOT BETWEEN 1 AND 120 THEN RAISE EXCEPTION 'invalid group name'; END IF;
+  INSERT INTO public."TblP139Organization"(name) VALUES(btrim(p_group_name)) RETURNING id INTO v_group_id;
+  INSERT INTO public."TblP139Membership"(organization_id,user_id,role,is_active)
+  VALUES(v_group_id,auth.uid(),'admin',true);
+  RETURN jsonb_build_object('group_id',v_group_id,'name',btrim(p_group_name));
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.p139_is_member(p_org_id uuid, p_admin_only boolean DEFAULT false)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER
@@ -33,9 +57,62 @@ CREATE OR REPLACE FUNCTION public.p139_list_my_organizations()
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
-  SELECT COALESCE(jsonb_agg(jsonb_build_object('id',o.id,'name',o.name,'role',m.role) ORDER BY o.name),'[]'::jsonb)
-  FROM public."TblP139Membership" m JOIN public."TblP139Organization" o ON o.id=m.organization_id
-  WHERE m.user_id=auth.uid() AND m.is_active AND o.is_active;
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('id',o.id,'name',o.name,'role',CASE WHEN public.p139_is_system_admin() THEN 'admin' ELSE m.role END) ORDER BY o.name),'[]'::jsonb)
+  FROM public."TblP139Organization" o
+  LEFT JOIN public."TblP139Membership" m ON m.organization_id=o.id AND m.user_id=auth.uid() AND m.is_active
+  WHERE o.is_active AND (public.p139_is_system_admin() OR m.role='admin');
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_public_list_groups()
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('id',o.id,'name',o.name) ORDER BY o.name),'[]'::jsonb)
+  FROM public."TblP139Organization" o
+  WHERE o.is_active AND EXISTS (SELECT 1 FROM public."TblP139Person" p WHERE p.organization_id=o.id AND p.is_active);
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_public_list_people(p_org_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  RETURN COALESCE((
+    SELECT jsonb_agg(jsonb_build_object('id',p.id,'display_name',p.display_name,'photo_path',p.photo_path,
+      'recognition_priority',p.recognition_priority,'aliases',COALESCE(a.aliases,'[]'::jsonb)) ORDER BY p.display_name)
+    FROM public."TblP139Person" p
+    JOIN public."TblP139Organization" o ON o.id=p.organization_id AND o.is_active
+    LEFT JOIN LATERAL (SELECT jsonb_agg(x.alias ORDER BY x.alias) AS aliases FROM public."TblP139Alias" x WHERE x.person_id=p.id) a ON true
+    WHERE p.organization_id=p_org_id AND p.is_active
+  ),'[]'::jsonb);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.p139_public_check_answer(p_person_id uuid,p_answer text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE v_org_id uuid; v_name text; v_correct boolean; v_confused text; v_answer text; v_normalized text;
+BEGIN
+  v_answer:=btrim(COALESCE(p_answer,''));
+  IF length(v_answer)<1 OR length(v_answer)>160 THEN RAISE EXCEPTION 'invalid answer'; END IF;
+  SELECT p.organization_id,p.display_name INTO v_org_id,v_name
+  FROM public."TblP139Person" p JOIN public."TblP139Organization" o ON o.id=p.organization_id AND o.is_active
+  WHERE p.id=p_person_id AND p.is_active;
+  IF v_org_id IS NULL THEN RAISE EXCEPTION 'person not found'; END IF;
+  v_normalized:=lower(regexp_replace(v_answer,'\s+','','g'));
+  SELECT (lower(regexp_replace(v_name,'\s+','','g'))=v_normalized OR EXISTS(
+    SELECT 1 FROM public."TblP139Alias" a WHERE a.person_id=p_person_id AND lower(regexp_replace(a.alias,'\s+','','g'))=v_normalized
+  )) INTO v_correct;
+  IF NOT v_correct THEN
+    SELECT p.display_name INTO v_confused FROM public."TblP139Person" p
+    WHERE p.organization_id=v_org_id AND p.is_active AND p.id<>p_person_id
+      AND (lower(regexp_replace(p.display_name,'\s+','','g'))=v_normalized OR EXISTS(
+        SELECT 1 FROM public."TblP139Alias" a WHERE a.person_id=p.id AND lower(regexp_replace(a.alias,'\s+','','g'))=v_normalized
+      )) LIMIT 1;
+  END IF;
+  RETURN jsonb_build_object('is_correct',v_correct,'correct_name',v_name,'confused_with',v_confused);
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION public.p139_list_people_for_priority(p_org_id uuid)
@@ -138,7 +215,7 @@ AS $$
 BEGIN
   IF NOT public.p139_is_member(p_org_id,true) THEN RAISE EXCEPTION 'not authorized'; END IF;
   RETURN COALESCE((
-    SELECT jsonb_agg(jsonb_build_object('id',p.id,'display_name',p.display_name,'photo_path',p.photo_path,'is_active',p.is_active,'aliases',COALESCE(a.aliases,'[]'::jsonb)) ORDER BY p.display_name)
+    SELECT jsonb_agg(jsonb_build_object('id',p.id,'display_name',p.display_name,'photo_path',p.photo_path,'recognition_priority',p.recognition_priority,'is_active',p.is_active,'aliases',COALESCE(a.aliases,'[]'::jsonb)) ORDER BY p.display_name)
     FROM public."TblP139Person" p
     LEFT JOIN LATERAL (SELECT jsonb_agg(x.alias ORDER BY x.alias) AS aliases FROM public."TblP139Alias" x WHERE x.person_id=p.id) a ON true
     WHERE p.organization_id=p_org_id
@@ -146,14 +223,15 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.p139_save_person(p_org_id uuid,p_person_id uuid,p_display_name text,p_aliases jsonb,p_photo_path text)
+DROP FUNCTION IF EXISTS public.p139_save_person(uuid,uuid,text,jsonb,text);
+CREATE OR REPLACE FUNCTION public.p139_save_person(p_org_id uuid,p_person_id uuid,p_display_name text,p_aliases jsonb,p_photo_path text,p_recognition_priority smallint DEFAULT 2)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 DECLARE v_alias text; v_norm text; v_id uuid;
 BEGIN
   IF NOT public.p139_is_member(p_org_id,true) THEN RAISE EXCEPTION 'not authorized'; END IF;
-  IF p_person_id IS NULL OR length(btrim(COALESCE(p_display_name,''))) NOT BETWEEN 1 AND 120 THEN RAISE EXCEPTION 'invalid person data'; END IF;
+  IF p_person_id IS NULL OR length(btrim(COALESCE(p_display_name,''))) NOT BETWEEN 1 AND 120 OR p_recognition_priority NOT BETWEEN 1 AND 3 THEN RAISE EXCEPTION 'invalid person data'; END IF;
   IF p_photo_path <> p_org_id::text||'/'||p_person_id::text||'.jpg' THEN RAISE EXCEPTION 'invalid photo path'; END IF;
   IF jsonb_typeof(COALESCE(p_aliases,'[]'::jsonb))<>'array' THEN RAISE EXCEPTION 'aliases must be a list'; END IF;
   v_norm := lower(regexp_replace(btrim(p_display_name),'\s+','','g'));
@@ -164,9 +242,9 @@ BEGIN
     SELECT 1 FROM public."TblP139Alias" a JOIN public."TblP139Person" p ON p.id=a.person_id
     WHERE p.organization_id=p_org_id AND p.id<>p_person_id AND lower(regexp_replace(a.alias,'\s+','','g'))=v_norm
   ) THEN RAISE EXCEPTION 'duplicate name or alias'; END IF;
-  INSERT INTO public."TblP139Person"(id,organization_id,display_name,photo_path,is_active,updated_at)
-  VALUES(p_person_id,p_org_id,btrim(p_display_name),p_photo_path,true,now())
-  ON CONFLICT(id) DO UPDATE SET display_name=EXCLUDED.display_name,photo_path=EXCLUDED.photo_path,is_active=true,updated_at=now()
+  INSERT INTO public."TblP139Person"(id,organization_id,display_name,photo_path,recognition_priority,is_active,updated_at)
+  VALUES(p_person_id,p_org_id,btrim(p_display_name),p_photo_path,p_recognition_priority,true,now())
+  ON CONFLICT(id) DO UPDATE SET display_name=EXCLUDED.display_name,photo_path=EXCLUDED.photo_path,recognition_priority=EXCLUDED.recognition_priority,is_active=true,updated_at=now()
   WHERE public."TblP139Person".organization_id=p_org_id
   RETURNING id INTO v_id;
   IF v_id IS NULL THEN RAISE EXCEPTION 'person belongs to another organization'; END IF;
@@ -220,29 +298,39 @@ CREATE OR REPLACE FUNCTION public.p139_bootstrap_organization(p_org_name text,p_
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
-DECLARE v_user_id uuid; v_org_id uuid;
+DECLARE v_user_id uuid; v_org_id uuid; v_existing_org uuid;
 BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'bootstrap is for SQL Editor setup only'; END IF;
   IF length(btrim(COALESCE(p_org_name,''))) NOT BETWEEN 1 AND 120 OR position('@' in COALESCE(p_admin_email,''))<2 THEN RAISE EXCEPTION 'invalid setup values'; END IF;
   SELECT id INTO v_user_id FROM auth.users WHERE lower(email)=lower(btrim(p_admin_email)) LIMIT 1;
   IF v_user_id IS NULL THEN RAISE EXCEPTION 'admin account not found; register through P130 first'; END IF;
+  IF EXISTS (SELECT 1 FROM public."TblP139SystemAdmin") THEN RAISE EXCEPTION 'bootstrap already completed'; END IF;
+  SELECT organization_id INTO v_existing_org FROM public."TblP139Membership"
+  WHERE user_id=v_user_id AND role='admin' AND is_active LIMIT 1;
+  IF v_existing_org IS NOT NULL THEN
+    INSERT INTO public."TblP139SystemAdmin"(user_id) VALUES(v_user_id);
+    RETURN jsonb_build_object('organization_id',v_existing_org,'admin_email',lower(btrim(p_admin_email)),'upgraded_existing_admin',true);
+  END IF;
+  IF EXISTS (SELECT 1 FROM public."TblP139Organization") THEN RAISE EXCEPTION 'P139 groups already exist; an existing group administrator must run bootstrap'; END IF;
   INSERT INTO public."TblP139Organization"(name) VALUES(btrim(p_org_name)) RETURNING id INTO v_org_id;
   INSERT INTO public."TblP139Membership"(organization_id,user_id,role,is_active) VALUES(v_org_id,v_user_id,'admin',true);
+  INSERT INTO public."TblP139SystemAdmin"(user_id) VALUES(v_user_id);
   RETURN jsonb_build_object('organization_id',v_org_id,'admin_email',lower(btrim(p_admin_email)));
 END;
 $$;
 
--- Storage bucket authorization helper is only used by policies for the P139 bucket.
+-- Public study photos are readable by anyone; only authorized administrators can edit them.
 DROP POLICY IF EXISTS "P139 private photo read" ON storage.objects;
-CREATE POLICY "P139 private photo read" ON storage.objects FOR SELECT TO authenticated
-USING (bucket_id='p139-private' AND public.p139_can_access_storage((storage.foldername(name))[1],false));
 DROP POLICY IF EXISTS "P139 private photo insert" ON storage.objects;
-CREATE POLICY "P139 private photo insert" ON storage.objects FOR INSERT TO authenticated
-WITH CHECK (bucket_id='p139-private' AND public.p139_can_access_storage((storage.foldername(name))[1],true));
 DROP POLICY IF EXISTS "P139 private photo update" ON storage.objects;
-CREATE POLICY "P139 private photo update" ON storage.objects FOR UPDATE TO authenticated
-USING (bucket_id='p139-private' AND public.p139_can_access_storage((storage.foldername(name))[1],true))
-WITH CHECK (bucket_id='p139-private' AND public.p139_can_access_storage((storage.foldername(name))[1],true));
 DROP POLICY IF EXISTS "P139 private photo delete" ON storage.objects;
-CREATE POLICY "P139 private photo delete" ON storage.objects FOR DELETE TO authenticated
-USING (bucket_id='p139-private' AND public.p139_can_access_storage((storage.foldername(name))[1],true));
+DROP POLICY IF EXISTS "P139 public photo insert" ON storage.objects;
+CREATE POLICY "P139 public photo insert" ON storage.objects FOR INSERT TO authenticated
+WITH CHECK (bucket_id='p139-public' AND public.p139_can_access_storage((storage.foldername(name))[1],true));
+DROP POLICY IF EXISTS "P139 public photo update" ON storage.objects;
+CREATE POLICY "P139 public photo update" ON storage.objects FOR UPDATE TO authenticated
+USING (bucket_id='p139-public' AND public.p139_can_access_storage((storage.foldername(name))[1],true))
+WITH CHECK (bucket_id='p139-public' AND public.p139_can_access_storage((storage.foldername(name))[1],true));
+DROP POLICY IF EXISTS "P139 public photo delete" ON storage.objects;
+CREATE POLICY "P139 public photo delete" ON storage.objects FOR DELETE TO authenticated
+USING (bucket_id='p139-public' AND public.p139_can_access_storage((storage.foldername(name))[1],true));
