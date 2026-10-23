@@ -25,3 +25,15 @@
 
 ## 版本
 V0.8 — 三區管理者介面與卡內基引言（1936）。
+
+
+## V0.8.2 hotfix
+1. If V0.8 SQL has already been run, execute only `Database/05_P139_V081_Fix.sql` in Supabase SQL Editor.
+2. Upload `index.html`, `app.js`, `styles.css` to GitHub Pages. Keep existing `config.js`.
+3. Success and error messages for person/group/assignment actions now appear next to their controls.
+4. Existing people, groups, group assignments, and photos are preserved.
+
+## V0.8.2 選項保留修正
+- 每次刷新管理清單前記住群組、人員及優先級，刷新後如選項仍存在便恢復。
+- 連續加入人員不再重設群組或優先級。
+- 本次僅需更新 `app.js`；不需執行新 SQL，保留 `config.js`。
